@@ -1,0 +1,175 @@
+// Package wire is the link between the Hive and a remote runner: framed
+// messages over one byte stream (an SSH session's stdin and stdout, or a local
+// command's), and the file trees a turn carries each way.
+//
+// A frame is one type byte, a big-endian uint32 length and the payload.
+package wire
+
+import (
+	"bufio"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"sync"
+)
+
+// Version is the protocol both sides must speak.
+const Version = 1
+
+// Frame types.
+const (
+	JSON   = 'J' // a JSON message
+	Tar    = 'T' // a chunk of a tar stream
+	End    = 'E' // the end of a tar stream
+	Out    = 'O' // turn stdout
+	Err    = 'R' // turn stderr
+	Outbox = 'M' // a mailbox request, runner to Hive
+	Inbox  = 'I' // a mailbox response, Hive to runner
+	Stop   = 'S' // stop the turn
+	Exit   = 'X' // the turn's exit code (JSON)
+	Done   = 'Z' // nothing more follows
+)
+
+// MaxFrame bounds one frame's payload.
+const MaxFrame = 4 << 20
+
+// Conn reads and writes frames; writes are safe from several goroutines.
+type Conn struct {
+	r   *bufio.Reader
+	w   io.Writer
+	wmu sync.Mutex
+}
+
+// New wraps a stream.
+func New(r io.Reader, w io.Writer) *Conn { return &Conn{r: bufio.NewReaderSize(r, 64<<10), w: w} }
+
+// Send writes one frame.
+func (c *Conn) Send(t byte, payload []byte) error {
+	if len(payload) > MaxFrame {
+		return fmt.Errorf("frame of %d bytes is over the limit", len(payload))
+	}
+	var h [5]byte
+	h[0] = t
+	binary.BigEndian.PutUint32(h[1:], uint32(len(payload)))
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	if _, err := c.w.Write(h[:]); err != nil {
+		return err
+	}
+	_, err := c.w.Write(payload)
+	return err
+}
+
+// SendJSON writes v as a frame of type t.
+func (c *Conn) SendJSON(t byte, v any) error {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return c.Send(t, raw)
+}
+
+// Recv reads one frame.
+func (c *Conn) Recv() (byte, []byte, error) {
+	var h [5]byte
+	if _, err := io.ReadFull(c.r, h[:]); err != nil {
+		return 0, nil, err
+	}
+	n := binary.BigEndian.Uint32(h[1:])
+	if n > MaxFrame {
+		return 0, nil, fmt.Errorf("frame of %d bytes is over the limit", n)
+	}
+	p := make([]byte, n)
+	if _, err := io.ReadFull(c.r, p); err != nil {
+		return 0, nil, err
+	}
+	return h[0], p, nil
+}
+
+// Expect reads one frame that must be of type t and decodes JSON into v.
+func (c *Conn) Expect(t byte, v any) error {
+	got, p, err := c.Recv()
+	if err != nil {
+		return err
+	}
+	if got != t {
+		return fmt.Errorf("expected frame %q, got %q", t, got)
+	}
+	if v == nil {
+		return nil
+	}
+	return json.Unmarshal(p, v)
+}
+
+// TarWriter returns a writer whose bytes go out as Tar frames; Close sends End.
+func (c *Conn) TarWriter() io.WriteCloser { return &chunkWriter{c: c} }
+
+type chunkWriter struct {
+	c   *Conn
+	buf []byte
+}
+
+func (w *chunkWriter) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	for len(w.buf) >= 1<<20 {
+		if err := w.c.Send(Tar, w.buf[:1<<20]); err != nil {
+			return 0, err
+		}
+		w.buf = w.buf[1<<20:]
+	}
+	return len(p), nil
+}
+
+func (w *chunkWriter) Close() error {
+	if len(w.buf) > 0 {
+		if err := w.c.Send(Tar, w.buf); err != nil {
+			return err
+		}
+		w.buf = nil
+	}
+	return w.c.Send(End, nil)
+}
+
+// TarReader reads Tar frames until End. The caller must read it to its end
+// before reading another frame.
+func (c *Conn) TarReader() io.Reader { return &chunkReader{c: c} }
+
+type chunkReader struct {
+	c    *Conn
+	buf  []byte
+	done bool
+}
+
+func (r *chunkReader) Read(p []byte) (int, error) {
+	for len(r.buf) == 0 {
+		if r.done {
+			return 0, io.EOF
+		}
+		t, payload, err := r.c.Recv()
+		if err != nil {
+			return 0, err
+		}
+		switch t {
+		case Tar:
+			r.buf = payload
+		case End:
+			r.done = true
+		default:
+			return 0, fmt.Errorf("frame %q inside a tar stream", t)
+		}
+	}
+	n := copy(p, r.buf)
+	r.buf = r.buf[n:]
+	return n, nil
+}
+
+// Drain reads what is left of a tar stream.
+func Drain(r io.Reader) error {
+	_, err := io.Copy(io.Discard, r)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
+}

@@ -1,0 +1,6 @@
+{
+  "name": "dispatch",
+  "description": "Runs some agent turns on another machine the person owns (first: iiks1) when this one is strained: the core hands a turn's sandbox spec to `run turn --spec`, which sends it over SSH (the module's own key, the runner's pinned host key) to a runner that runs it in the hive binary's own sandbox there, and brings its output, mailbox and files back. Its program reads each runner's room and reports the board and where each turn ran. It runs ssh and ssh-keygen and nothing else; it keeps its key, the pinned host keys and its records in its HOME.",
+  "exec": ["./run"],
+  "hooks": ["status", "executor"]
+}
