@@ -66,7 +66,7 @@ func Setup(cfg Config, hiveKey string, install bool) (string, error) {
 	if len(key) < 2 || !strings.HasPrefix(key[0], "ssh-") {
 		return "", errors.New(`--hive-key "ssh-ed25519 AAAA..." is the Hive's key: on the Hive's machine, run: hive dispatch key`)
 	}
-	line := fmt.Sprintf(`command="%s runner serve",restrict %s %s hive-dispatch`, self, key[0], key[1])
+	line := AuthorizedKey(self, key[0], key[1])
 	home, _ := os.UserHomeDir()
 	ak := filepath.Join(home, ".ssh", "authorized_keys")
 	if install {
@@ -113,4 +113,14 @@ func Setup(cfg Config, hiveKey string, install bool) (string, error) {
 	}
 	fmt.Fprintf(&b, "\nthen, on the Hive's machine:\n  hive dispatch add %s ssh://%s@%s --host-key %q\n", cfg.Name, who, host, hostKey)
 	return b.String(), nil
+}
+
+// AuthorizedKey is the authorized_keys line that lets the Hive's key start
+// self's `runner serve` and nothing else. The path is quoted for the shell sshd
+// runs it with (a path with a space or quote in it stays one word), and that
+// is escaped for authorized_keys' own double quotes (sshd undoes only \").
+func AuthorizedKey(self, typ, key string) string {
+	cmd := "'" + strings.ReplaceAll(self, "'", `'\''`) + "' runner serve"
+	cmd = strings.ReplaceAll(cmd, `"`, `\"`)
+	return fmt.Sprintf(`command="%s",restrict %s %s hive-dispatch`, cmd, typ, key)
 }

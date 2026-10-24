@@ -76,3 +76,13 @@ SSH (outbound TCP to the runner's address, which is on the local network:
 the egress proxy refuses private addresses unless granted), write the turn's
 checkout, box and home, and read the turn's mounts (kb, modules, tools). The
 module declares that reach; it holds no credential but its own SSH key.
+
+## Once module programs are sandboxed
+
+Today `run turn --spec` falls back to the local sandbox itself (it starts the
+spec's `hive sandbox-exec`) when no runner has room or the turn can't go. When
+module programs run in a sandbox (task 261024-174301-2f7050eb10), that nested
+start may not work. Then the fallback should move to the core: `run room`
+already answers before the core hands a turn over, so the core can keep a
+"no room" turn and start it locally as it does now, and `turn` would exit
+without starting anything.
