@@ -142,9 +142,20 @@ func (h Home) Record(p Placed) error {
 }
 
 func writeAtomic(path string, raw []byte) error {
-	os.MkdirAll(filepath.Dir(path), 0o700)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+	dir := filepath.Dir(path)
+	os.MkdirAll(dir, 0o700)
+	f, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	if _, err := f.Write(raw); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
 		return err
 	}
 	return os.Rename(tmp, path)

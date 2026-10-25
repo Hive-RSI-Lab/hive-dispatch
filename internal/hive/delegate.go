@@ -87,21 +87,24 @@ func sandboxExec(hive string, s spec.Spec) (int, error) {
 	if err != nil {
 		return 125, err
 	}
+	specPath := f.Name()
 	f.Close()
-	if err := spec.Write(f.Name(), s); err != nil {
-		os.Remove(f.Name())
+	if err := spec.Write(specPath, s); err != nil {
+		os.Remove(specPath)
 		return 125, err
 	}
-	cmd := exec.Command(hive, "sandbox-exec", "--spec", f.Name())
+	cmd := exec.Command(hive, "sandbox-exec", "--spec", specPath)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	err = cmd.Run()
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
+		os.Remove(specPath)
 		return ee.ExitCode(), nil
 	}
 	if err != nil {
-		os.Remove(f.Name())
+		os.Remove(specPath)
 		return 125, err
 	}
+	os.Remove(specPath)
 	return 0, nil
 }
