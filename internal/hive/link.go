@@ -1,0 +1,140 @@
+package hive
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"net/url"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/Hive-RSI-Lab/hive-dispatch/internal/wire"
+)
+
+// Link is one session with a runner: an SSH session (or a local command)
+// whose stdin and stdout carry frames. The Hive dials; the runner listens on
+// nothing of its own.
+type Link struct {
+	*wire.Conn
+	cmd    *exec.Cmd
+	in     io.WriteCloser
+	out    *os.File
+	stderr *lockedBuf
+	done   chan struct{}
+}
+
+// RemoteCommand is what an ssh:// address runs on the other machine when its
+// key isn't held to a forced command (it should be: see docs/README.md).
+const RemoteCommand = "hive-dispatch runner serve"
+
+// Argv is the command that opens a link to r.
+func (h Home) Argv(r Runner) ([]string, error) {
+	if cmd, ok := strings.CutPrefix(r.Address, "exec:"); ok {
+		argv := strings.Fields(cmd)
+		if len(argv) == 0 {
+			return nil, fmt.Errorf("runner %s: exec: names no command", r.Name)
+		}
+		return argv, nil
+	}
+	u, err := url.Parse(r.Address)
+	if err != nil || u.Scheme != "ssh" || u.Hostname() == "" || u.User.Username() == "" {
+		return nil, fmt.Errorf("runner %s: address %q is not ssh://user@host[:port]", r.Name, r.Address)
+	}
+	port := u.Port()
+	if port == "" {
+		port = "22"
+	}
+	remote := RemoteCommand
+	if u.Path != "" && u.Path != "/" {
+		remote = u.Path + " runner serve"
+	}
+	// Only the module's own key and its own pinned host keys: no ssh config,
+	// no agent, no prompts, no forwarding of any kind.
+	return []string{"ssh", "-F", "/dev/null", "-T",
+		"-i", h.Key(), "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none",
+		"-o", "UserKnownHostsFile=" + h.KnownHosts(), "-o", "GlobalKnownHostsFile=/dev/null", "-o", "StrictHostKeyChecking=yes",
+		"-o", "HostKeyAlias=" + r.Name,
+		"-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
+		"-o", "ForwardAgent=no", "-o", "ForwardX11=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no",
+		"-p", port, "-l", u.User.Username(), u.Hostname(), remote}, nil
+}
+
+// Dial opens a link to r.
+func (h Home) Dial(r Runner) (*Link, error) {
+	argv, err := h.Argv(r)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(argv[0], argv[1:]...)
+	// Nothing of the caller's environment goes along: the core starts a turn
+	// with the daemon's own.
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + string(h), "LANG=C.UTF-8"}
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	// Not StdoutPipe: Wait closes that as soon as the command exits, which
+	// can lose the last frames still unread.
+	out, w, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	cmd.Stdout = w
+	l := &Link{cmd: cmd, in: in, out: out, stderr: &lockedBuf{}, done: make(chan struct{})}
+	cmd.Stderr = l.stderr
+	err = cmd.Start()
+	w.Close()
+	if err != nil {
+		out.Close()
+		return nil, fmt.Errorf("runner %s: %w", r.Name, err)
+	}
+	go func() { cmd.Wait(); close(l.done) }()
+	l.Conn = wire.New(out, in)
+	return l, nil
+}
+
+// Why adds what the link's command said on stderr to err.
+func (l *Link) Why(err error) error {
+	if s := strings.TrimSpace(l.stderr.String()); s != "" {
+		return fmt.Errorf("%w (%s)", err, clip(s, 400))
+	}
+	return err
+}
+
+// Close ends the session.
+func (l *Link) Close() {
+	l.in.Close()
+	select {
+	case <-l.done:
+	case <-time.After(5 * time.Second):
+		l.cmd.Process.Kill()
+		<-l.done
+	}
+	l.out.Close()
+}
+
+type lockedBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (b *lockedBuf) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.b.Len() > 64<<10 {
+		return len(p), nil
+	}
+	return b.b.Write(p)
+}
+
+func (b *lockedBuf) String() string { b.mu.Lock(); defer b.mu.Unlock(); return b.b.String() }
+
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
