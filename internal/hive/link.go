@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -14,7 +15,7 @@ import (
 	"github.com/Hive-RSI-Lab/hive-dispatch/internal/wire"
 )
 
-// Link is one session with a runner: an SSH session (or a local command)
+// Link is one session with a runner: an SSH session
 // whose stdin and stdout carry frames. The Hive dials; the runner listens on
 // nothing of its own.
 type Link struct {
@@ -30,13 +31,18 @@ type Link struct {
 // key isn't held to a forced command (it should be: see docs/README.md).
 const RemoteCommand = "hive-dispatch runner serve"
 
-// Argv is the command that opens a link to r.
+// testLinks lets the tests reach a runner on this machine through a local
+// command instead of ssh, by its address. Only _test.go files fill it: a
+// runner in runners.json is always ssh://, so ssh is the only command a
+// link ever runs.
+var testLinks = map[string][]string{}
+
+// safePath is a hive-dispatch path on the runner, sent as the remote command.
+var safePath = regexp.MustCompile(`^/[A-Za-z0-9/._-]+$`)
+
+// Argv is the command that opens a link to r: ssh, to an ssh:// address.
 func (h Home) Argv(r Runner) ([]string, error) {
-	if cmd, ok := strings.CutPrefix(r.Address, "exec:"); ok {
-		argv := strings.Fields(cmd)
-		if len(argv) == 0 {
-			return nil, fmt.Errorf("runner %s: exec: names no command", r.Name)
-		}
+	if argv, ok := testLinks[r.Address]; ok {
 		return argv, nil
 	}
 	u, err := url.Parse(r.Address)
@@ -49,6 +55,9 @@ func (h Home) Argv(r Runner) ([]string, error) {
 	}
 	remote := RemoteCommand
 	if u.Path != "" && u.Path != "/" {
+		if !safePath.MatchString(u.Path) {
+			return nil, fmt.Errorf("runner %s: the path in %q may hold only letters, digits, '/', '.', '_' and '-'", r.Name, r.Address)
+		}
 		remote = u.Path + " runner serve"
 	}
 	// Only the module's own key and its own pinned host keys: no ssh config,

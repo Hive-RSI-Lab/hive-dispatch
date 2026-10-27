@@ -39,6 +39,10 @@ func main() {
 	if err != nil {
 		os.Exit(125)
 	}
+	specAt := "spec-file: gone\n"
+	if fi, err := os.Stat(os.Args[3]); err == nil {
+		specAt = fmt.Sprintf("spec-file: %s %o\n", os.Args[3], fi.Mode().Perm())
+	}
 	os.Remove(os.Args[3])
 	var s spec
 	json.Unmarshal(raw, &s)
@@ -52,6 +56,7 @@ func main() {
 	errf, _ := os.OpenFile(s.Stdout+".err", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	prompt, _ := os.ReadFile(s.Stdin)
 	fmt.Fprintf(out, "got: %s\n", prompt)
+	out.WriteString(specAt)
 	for _, e := range s.Env {
 		if strings.HasPrefix(e, "HIVE_ID=") {
 			fmt.Fprintln(out, e)

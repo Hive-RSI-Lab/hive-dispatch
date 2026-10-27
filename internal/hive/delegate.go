@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/Hive-RSI-Lab/hive-dispatch/internal/spec"
@@ -51,22 +50,19 @@ func (h Home) Delegate(specPath, runner string) int {
 	return res.Code
 }
 
-// Local runs s in this machine's sandbox, as the core would have.
+// Local runs s in this machine's sandbox, as the core would have: the core
+// has handed the turn over and can't take it back, so a turn that can't go
+// runs here, through the hive binary the core named among the turn's tools
+// (`hive sandbox-exec --spec <file>`), and through nothing else. module.json
+// declares it.
 func (h Home) Local(s spec.Spec, why string) int {
 	at := time.Now()
 	p := Placed{At: at, Run: s.ID, Turn: filepath.Base(s.Stdout), Where: "local", Why: why}
 	h.Record(p)
-	hive := ""
-	for _, t := range s.Tools {
-		if strings.HasPrefix(filepath.Base(t), "hive") {
-			hive = t
-			break
-		}
-	}
 	code := 125
-	err := errors.New("no hive binary among the turn's tools")
-	if hive != "" {
-		code, err = sandboxExec(hive, s)
+	hive, err := hiveTool(s)
+	if err == nil {
+		code, err = h.sandboxExec(hive, s)
 	}
 	if err != nil {
 		if f, e := appendFile(s.Stdout + ".err"); e == nil {
@@ -82,15 +78,41 @@ func (h Home) Local(s spec.Spec, why string) int {
 	return code
 }
 
-func sandboxExec(hive string, s spec.Spec) (int, error) {
-	f, err := os.CreateTemp("", "hive-spec-*.json")
+// hiveTool is the hive binary among the turn's tools: an absolute path to an
+// executable named hive (hive.exe on Windows).
+func hiveTool(s spec.Spec) (string, error) {
+	for _, t := range s.Tools {
+		if b := filepath.Base(t); b != "hive" && b != "hive.exe" {
+			continue
+		}
+		if !filepath.IsAbs(t) {
+			return "", fmt.Errorf("the turn's hive binary %q isn't an absolute path", t)
+		}
+		if fi, err := os.Stat(t); err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
+			return "", fmt.Errorf("the turn's hive binary %q isn't an executable file", t)
+		}
+		return t, nil
+	}
+	return "", errors.New("no hive binary among the turn's tools")
+}
+
+// sandboxExec runs `hive sandbox-exec` on s. The spec carries the turn's
+// token, so it is written under the module's HOME (tmp/, 0700), as 0600,
+// and removed when the turn ends (sandbox-exec removes it once read).
+func (h Home) sandboxExec(hive string, s spec.Spec) (int, error) {
+	dir := h.path("tmp")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return 125, err
+	}
+	os.Chmod(dir, 0o700)
+	f, err := os.CreateTemp(dir, "spec-*.json")
 	if err != nil {
 		return 125, err
 	}
 	specPath := f.Name()
 	f.Close()
+	defer os.Remove(specPath)
 	if err := spec.Write(specPath, s); err != nil {
-		os.Remove(specPath)
 		return 125, err
 	}
 	cmd := exec.Command(hive, "sandbox-exec", "--spec", specPath)
@@ -98,13 +120,10 @@ func sandboxExec(hive string, s spec.Spec) (int, error) {
 	err = cmd.Run()
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
-		os.Remove(specPath)
 		return ee.ExitCode(), nil
 	}
 	if err != nil {
-		os.Remove(specPath)
 		return 125, err
 	}
-	os.Remove(specPath)
 	return 0, nil
 }

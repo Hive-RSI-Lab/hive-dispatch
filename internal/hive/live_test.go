@@ -17,8 +17,8 @@ func TestLiveSandbox(t *testing.T) {
 		t.Skip("set DISPATCH_LIVE_HIVE to a hive binary to run a turn in its real sandbox")
 	}
 	w := newWorld(t)
-	addr := "exec:" + built.dispatch + " runner serve --config /nonexistent --name live --max 2 --dir " + w.remote + " --hive " + hiveBin
-	if err := w.home.Add(Runner{Name: "fake", Address: addr, MinFreeMB: 1, MaxLoad: 1000}, ""); err != nil {
+	addr := localRunner(built.dispatch + " runner serve --config /nonexistent --name live --max 2 --dir " + w.remote + " --hive " + hiveBin)
+	if err := w.home.Add(Runner{Name: "fake", Address: addr, MinFreeMB: 1, MaxLoad: 1000}, testHostKey); err != nil {
 		t.Fatal(err)
 	}
 	w.spec.Argv = []string{"sh", "-c", `cat; echo; echo inside > /work/live.txt; ls /hive/state | wc -l; cat /hive/kb/note.md; exit 4`}
