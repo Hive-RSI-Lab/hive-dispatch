@@ -23,7 +23,8 @@ func TestAddPinsHostKey(t *testing.T) {
 	}
 	// A runner is reached over ssh and nothing else: runners.json can't name
 	// a command to run here, nor a remote command beyond hive-dispatch's path.
-	for _, addr := range []string{"exec:/bin/sh -c id", "exec:x", "file:///bin/sh", "/bin/sh", "ssh://u@x/bin/sh;id", "ssh://u@x/a$(id)", "ssh://x"} {
+	for _, addr := range []string{"exec:/bin/sh -c id", "exec:x", "file:///bin/sh", "/bin/sh", "ssh://u@x/bin/sh;id", "ssh://u@x/a$(id)", "ssh://x",
+		"ssh://u@-oProxyCommand=id", "ssh://u@-oProxyCommand=id:22", "ssh://-oProxyCommand=id@x", "ssh://u@x%20-oProxyCommand=id", "ssh://u@x:-1"} {
 		if err := h.Add(Runner{Name: "bad", Address: addr}, "ssh-ed25519 AAAA"); err == nil {
 			t.Errorf("address %q was taken", addr)
 		}
@@ -47,7 +48,7 @@ func TestAddPinsHostKey(t *testing.T) {
 	}
 	joined := strings.Join(argv, " ")
 	for _, want := range []string{"-F /dev/null", "IdentityAgent=none", "IdentitiesOnly=yes", "StrictHostKeyChecking=yes", "HostKeyAlias=iiks1",
-		"UserKnownHostsFile=" + h.KnownHosts(), "-i " + h.Key(), "-p 2222", "-l ihsan iiks1.lan " + RemoteCommand} {
+		"UserKnownHostsFile=" + h.KnownHosts(), "-i " + h.Key(), "-p 2222", "ProxyCommand=none", "-l ihsan -- iiks1.lan " + RemoteCommand} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("ssh argv lacks %q: %s", want, joined)
 		}

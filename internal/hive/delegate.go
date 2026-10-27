@@ -104,7 +104,9 @@ func (h Home) sandboxExec(hive string, s spec.Spec) (int, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return 125, err
 	}
-	os.Chmod(dir, 0o700)
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return 125, fmt.Errorf("making %s 0700 for the turn's spec: %w", dir, err)
+	}
 	f, err := os.CreateTemp(dir, "spec-*.json")
 	if err != nil {
 		return 125, err

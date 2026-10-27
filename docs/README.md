@@ -45,7 +45,9 @@ It is an optional module, not one of the defaults.
   would have: the hive binary the core named among the turn's tools (an
   absolute path to `hive`), `hive sandbox-exec --spec F`, with F (it carries
   the turn's token) written under the module's HOME in `tmp/` (0700) as 0600
-  and removed when the turn ends. module.json declares this.
+  and removed when the turn ends. module.json declares this. That binary is
+  trusted because the core wrote the spec naming it (its own hive binary);
+  nothing the module or a runner sends chooses it.
 
 ### What crosses, and what doesn't
 

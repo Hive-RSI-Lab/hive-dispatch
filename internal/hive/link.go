@@ -40,6 +40,15 @@ var testLinks = map[string][]string{}
 // safePath is a hive-dispatch path on the runner, sent as the remote command.
 var safePath = regexp.MustCompile(`^/[A-Za-z0-9/._-]+$`)
 
+// safeHost and safeUser keep an address's host and user from reading as
+// one of ssh's options (`ssh://u@-oProxyCommand=id`): no leading '-', and
+// only what a host name, an IP address or a login name holds.
+var (
+	safeHost = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.:-]*$`)
+	safeUser = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]*$`)
+	safePort = regexp.MustCompile(`^[0-9]{1,5}$`)
+)
+
 // Argv is the command that opens a link to r: ssh, to an ssh:// address.
 func (h Home) Argv(r Runner) ([]string, error) {
 	if argv, ok := testLinks[r.Address]; ok {
@@ -53,6 +62,9 @@ func (h Home) Argv(r Runner) ([]string, error) {
 	if port == "" {
 		port = "22"
 	}
+	if !safeHost.MatchString(u.Hostname()) || !safeUser.MatchString(u.User.Username()) || !safePort.MatchString(port) {
+		return nil, fmt.Errorf("runner %s: address %q: the user and host may hold only letters, digits, '.', '_', ':' and '-', and may not start with '-'", r.Name, r.Address)
+	}
 	remote := RemoteCommand
 	if u.Path != "" && u.Path != "/" {
 		if !safePath.MatchString(u.Path) {
@@ -61,14 +73,15 @@ func (h Home) Argv(r Runner) ([]string, error) {
 		remote = u.Path + " runner serve"
 	}
 	// Only the module's own key and its own pinned host keys: no ssh config,
-	// no agent, no prompts, no forwarding of any kind.
-	return []string{"ssh", "-F", "/dev/null", "-T",
+	// no agent, no proxy command, no prompts, no forwarding of any kind; and
+	// "--", so nothing after it reads as an option.
+	return []string{"ssh", "-F", "/dev/null", "-T", "-o", "ProxyCommand=none", "-o", "ProxyJump=none",
 		"-i", h.Key(), "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none",
 		"-o", "UserKnownHostsFile=" + h.KnownHosts(), "-o", "GlobalKnownHostsFile=/dev/null", "-o", "StrictHostKeyChecking=yes",
 		"-o", "HostKeyAlias=" + r.Name,
 		"-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
 		"-o", "ForwardAgent=no", "-o", "ForwardX11=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no",
-		"-p", port, "-l", u.User.Username(), u.Hostname(), remote}, nil
+		"-p", port, "-l", u.User.Username(), "--", u.Hostname(), remote}, nil
 }
 
 // Dial opens a link to r.
