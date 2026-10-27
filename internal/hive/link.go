@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -14,7 +15,7 @@ import (
 	"github.com/Hive-RSI-Lab/hive-dispatch/internal/wire"
 )
 
-// Link is one session with a runner: an SSH session (or a local command)
+// Link is one session with a runner: an SSH session
 // whose stdin and stdout carry frames. The Hive dials; the runner listens on
 // nothing of its own.
 type Link struct {
@@ -30,13 +31,27 @@ type Link struct {
 // key isn't held to a forced command (it should be: see docs/README.md).
 const RemoteCommand = "hive-dispatch runner serve"
 
-// Argv is the command that opens a link to r.
+// testLinks lets the tests reach a runner on this machine through a local
+// command instead of ssh, by its address. Only _test.go files fill it: a
+// runner in runners.json is always ssh://, so ssh is the only command a
+// link ever runs.
+var testLinks = map[string][]string{}
+
+// safePath is a hive-dispatch path on the runner, sent as the remote command.
+var safePath = regexp.MustCompile(`^/[A-Za-z0-9/._-]+$`)
+
+// safeHost and safeUser keep an address's host and user from reading as
+// one of ssh's options (`ssh://u@-oProxyCommand=id`): no leading '-', and
+// only what a host name, an IP address or a login name holds.
+var (
+	safeHost = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.:-]*$`)
+	safeUser = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]*$`)
+	safePort = regexp.MustCompile(`^[0-9]{1,5}$`)
+)
+
+// Argv is the command that opens a link to r: ssh, to an ssh:// address.
 func (h Home) Argv(r Runner) ([]string, error) {
-	if cmd, ok := strings.CutPrefix(r.Address, "exec:"); ok {
-		argv := strings.Fields(cmd)
-		if len(argv) == 0 {
-			return nil, fmt.Errorf("runner %s: exec: names no command", r.Name)
-		}
+	if argv, ok := testLinks[r.Address]; ok {
 		return argv, nil
 	}
 	u, err := url.Parse(r.Address)
@@ -47,19 +62,26 @@ func (h Home) Argv(r Runner) ([]string, error) {
 	if port == "" {
 		port = "22"
 	}
+	if !safeHost.MatchString(u.Hostname()) || !safeUser.MatchString(u.User.Username()) || !safePort.MatchString(port) {
+		return nil, fmt.Errorf("runner %s: address %q: the user and host may hold only letters, digits, '.', '_', ':' and '-', and may not start with '-'", r.Name, r.Address)
+	}
 	remote := RemoteCommand
 	if u.Path != "" && u.Path != "/" {
+		if !safePath.MatchString(u.Path) {
+			return nil, fmt.Errorf("runner %s: the path in %q may hold only letters, digits, '/', '.', '_' and '-'", r.Name, r.Address)
+		}
 		remote = u.Path + " runner serve"
 	}
 	// Only the module's own key and its own pinned host keys: no ssh config,
-	// no agent, no prompts, no forwarding of any kind.
-	return []string{"ssh", "-F", "/dev/null", "-T",
+	// no agent, no proxy command, no prompts, no forwarding of any kind; and
+	// "--", so nothing after it reads as an option.
+	return []string{"ssh", "-F", "/dev/null", "-T", "-o", "ProxyCommand=none", "-o", "ProxyJump=none",
 		"-i", h.Key(), "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none",
 		"-o", "UserKnownHostsFile=" + h.KnownHosts(), "-o", "GlobalKnownHostsFile=/dev/null", "-o", "StrictHostKeyChecking=yes",
 		"-o", "HostKeyAlias=" + r.Name,
 		"-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
 		"-o", "ForwardAgent=no", "-o", "ForwardX11=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no",
-		"-p", port, "-l", u.User.Username(), u.Hostname(), remote}, nil
+		"-p", port, "-l", u.User.Username(), "--", u.Hostname(), remote}, nil
 }
 
 // Dial opens a link to r.

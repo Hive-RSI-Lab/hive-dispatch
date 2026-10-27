@@ -13,6 +13,8 @@ if [ ! -x "$bin" ] || [ -n "$(find "$here/cmd" "$here/internal" "$here/go.mod" -
 		done
 	fi
 	command -v go >/dev/null 2>&1 || { echo "dispatch: building needs Go 1.23 or later on PATH" >&2; exit 127; }
-	(cd "$here" && CGO_ENABLED=0 GOFLAGS=-mod=mod go build -trimpath -o "$bin.tmp" ./cmd/dispatch && mv "$bin.tmp" "$bin")
+	# GOTOOLCHAIN=local: build with the Go found here (go.mod says 1.23, as
+	# above), never one fetched; the module has no dependencies to fetch either.
+	(cd "$here" && CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-mod=readonly GOPROXY=off go build -trimpath -o "$bin.tmp" ./cmd/dispatch && mv "$bin.tmp" "$bin")
 fi
 exec "$bin" "$@"

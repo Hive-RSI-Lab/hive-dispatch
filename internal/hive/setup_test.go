@@ -18,8 +18,22 @@ func TestAddPinsHostKey(t *testing.T) {
 	if err := h.Add(r, ""); err == nil {
 		t.Fatal("an ssh runner was added with no host key to pin")
 	}
-	if err := h.Add(Runner{Name: "Bad Name", Address: "exec:x"}, ""); err == nil {
+	if err := h.Add(Runner{Name: "Bad Name", Address: "ssh://u@x"}, "ssh-ed25519 AAAA"); err == nil {
 		t.Fatal("a bad name was taken")
+	}
+	// A runner is reached over ssh and nothing else: runners.json can't name
+	// a command to run here, nor a remote command beyond hive-dispatch's path.
+	for _, addr := range []string{"exec:/bin/sh -c id", "exec:x", "file:///bin/sh", "/bin/sh", "ssh://u@x/bin/sh;id", "ssh://u@x/a$(id)", "ssh://x",
+		"ssh://u@-oProxyCommand=id", "ssh://u@-oProxyCommand=id:22", "ssh://-oProxyCommand=id@x", "ssh://u@x%20-oProxyCommand=id", "ssh://u@x:-1"} {
+		if err := h.Add(Runner{Name: "bad", Address: addr}, "ssh-ed25519 AAAA"); err == nil {
+			t.Errorf("address %q was taken", addr)
+		}
+		if _, err := h.Argv(Runner{Name: "bad", Address: addr}); err == nil {
+			t.Errorf("address %q dials", addr)
+		}
+	}
+	if argv, err := h.Argv(Runner{Name: "p", Address: "ssh://u@x/opt/hive-dispatch"}); err != nil || argv[0] != "ssh" || argv[len(argv)-1] != "/opt/hive-dispatch runner serve" {
+		t.Errorf("a path to hive-dispatch: %q %v", argv, err)
 	}
 	if err := h.Add(r, "ssh-ed25519 AAAAC3Nza hostcomment"); err != nil {
 		t.Fatal(err)
@@ -34,7 +48,7 @@ func TestAddPinsHostKey(t *testing.T) {
 	}
 	joined := strings.Join(argv, " ")
 	for _, want := range []string{"-F /dev/null", "IdentityAgent=none", "IdentitiesOnly=yes", "StrictHostKeyChecking=yes", "HostKeyAlias=iiks1",
-		"UserKnownHostsFile=" + h.KnownHosts(), "-i " + h.Key(), "-p 2222", "-l ihsan iiks1.lan " + RemoteCommand} {
+		"UserKnownHostsFile=" + h.KnownHosts(), "-i " + h.Key(), "-p 2222", "ProxyCommand=none", "-l ihsan -- iiks1.lan " + RemoteCommand} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("ssh argv lacks %q: %s", want, joined)
 		}
@@ -96,7 +110,7 @@ func TestServeReports(t *testing.T) {
 			kinds[b["kind"].(string)] += b["text"].(string)
 		}
 		mu.Unlock()
-		if strings.Contains(kinds["board"], "fake (exec:") && strings.Contains(kinds["turn"], "w-test turn-001.jsonl on fake: exit 3") {
+		if strings.Contains(kinds["board"], "fake (ssh://") && strings.Contains(kinds["turn"], "w-test turn-001.jsonl on fake: exit 3") {
 			return
 		}
 		if time.Now().After(deadline) {

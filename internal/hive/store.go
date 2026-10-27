@@ -24,7 +24,7 @@ import (
 // Runner is one registered machine.
 type Runner struct {
 	Name    string `json:"name"`
-	Address string `json:"address"` // ssh://user@host[:port] or exec:<command> (a runner on this machine)
+	Address string `json:"address"` // ssh://user@host[:port][/path/to/hive-dispatch]
 	// A runner has room while its load per core is under MaxLoad and it has
 	// MinFreeMB of memory free; 0 takes the defaults.
 	MaxLoad   float64 `json:"max_load,omitempty"`

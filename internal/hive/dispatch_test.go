@@ -3,6 +3,7 @@ package hive
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -33,6 +34,17 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
+}
+
+// testHostKey stands in for a runner's host key: a test link runs no ssh.
+const testHostKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest"
+
+// localRunner is an ssh:// address that the tests' links reach through cmd
+// on this machine instead (testLinks), as a runner in runners.json can't.
+func localRunner(cmd string) string {
+	addr := fmt.Sprintf("ssh://test@link-%d.invalid", len(testLinks))
+	testLinks[addr] = strings.Fields(cmd)
+	return addr
 }
 
 type world struct {
@@ -78,8 +90,8 @@ func newWorld(t *testing.T) *world {
 		Tools: []string{built.fakehive, "claude"}, Stdin: filepath.Join(host, "turn-001.prompt"), Stdout: w.out,
 		StopFile: filepath.Join(host, "stop"), Network: true,
 	}
-	addr := "exec:" + built.dispatch + " runner serve --config /nonexistent --name fake --max 2 --dir " + w.remote + " --hive " + built.fakehive
-	if err := w.home.Add(Runner{Name: "fake", Address: addr, MinFreeMB: 1, MaxLoad: 1000}, ""); err != nil {
+	addr := localRunner(built.dispatch + " runner serve --config /nonexistent --name fake --max 2 --dir " + w.remote + " --hive " + built.fakehive)
+	if err := w.home.Add(Runner{Name: "fake", Address: addr, MinFreeMB: 1, MaxLoad: 1000}, testHostKey); err != nil {
 		t.Fatal(err)
 	}
 	return w
@@ -238,9 +250,11 @@ func TestStopReachesRunner(t *testing.T) {
 func TestFallsBackHere(t *testing.T) {
 	for name, edit := range map[string]func(w *world){
 		"granted a local service": func(w *world) { w.spec.Local = []string{"127.0.0.1:11434"} },
-		"runner unreachable":      func(w *world) { w.home.Add(Runner{Name: "fake", Address: "exec:/nonexistent/runner"}, "") },
+		"runner unreachable": func(w *world) {
+			w.home.Add(Runner{Name: "fake", Address: localRunner("/nonexistent/runner")}, testHostKey)
+		},
 		"runner has no sandbox": func(w *world) {
-			w.home.Add(Runner{Name: "fake", Address: "exec:" + built.dispatch + " runner serve --config /nonexistent --max 1 --dir " + w.remote + " --hive /nonexistent/hive", MinFreeMB: 1, MaxLoad: 1000}, "")
+			w.home.Add(Runner{Name: "fake", Address: localRunner(built.dispatch + " runner serve --config /nonexistent --max 1 --dir " + w.remote + " --hive /nonexistent/hive"), MinFreeMB: 1, MaxLoad: 1000}, testHostKey)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -253,6 +267,18 @@ func TestFallsBackHere(t *testing.T) {
 			ps := w.home.Turns()
 			if len(ps) != 1 || ps[0].Where != "local" || ps[0].Why == "" || !ps[0].Ended {
 				t.Fatalf("turns = %+v", ps)
+			}
+			// The spec, token and all, went to sandbox-exec from the module's
+			// own HOME, readable by it alone, and didn't stay there.
+			tmp := filepath.Join(string(w.home), "tmp")
+			if want := "spec-file: " + tmp + string(filepath.Separator); !strings.Contains(w.read(w.out), want) || !strings.Contains(w.read(w.out), " 600\n") {
+				t.Errorf("the spec wasn't written under HOME as 0600:\n%s", w.read(w.out))
+			}
+			if fi, err := os.Stat(tmp); err != nil || fi.Mode().Perm() != 0o700 {
+				t.Errorf("tmp/ = %v %v", fi, err)
+			}
+			if ents, _ := os.ReadDir(tmp); len(ents) != 0 {
+				t.Errorf("a spec stayed in tmp/: %v", ents)
 			}
 		})
 	}
@@ -280,7 +306,7 @@ func TestRoom(t *testing.T) {
 			t.Errorf("%s: Room = %q, want %q", c.name, got, c.want)
 		}
 	}
-	h.Save([]Runner{{Name: "busy", Address: "exec:x"}, {Name: "idle", Address: "exec:x"}, {Name: "off", Address: "exec:x", Off: true}})
+	h.Save([]Runner{{Name: "busy", Address: "ssh://u@x"}, {Name: "idle", Address: "ssh://u@x"}, {Name: "off", Address: "ssh://u@x", Off: true}})
 	busy, idle := ok, ok
 	busy.Running = 2
 	h.See("busy", Seen{Status: busy, At: time.Now()})
@@ -339,5 +365,18 @@ func TestDispatchable(t *testing.T) {
 	s.Cwd = "/work"
 	if why := Dispatchable(s); why != "" {
 		t.Errorf("a sandboxed turn wasn't: %s", why)
+	}
+}
+
+// A turn that runs here runs only the hive binary the core named among its
+// tools, by its absolute path.
+func TestLocalRunsOnlyTheHiveBinary(t *testing.T) {
+	for _, tools := range [][]string{nil, {"claude"}, {"hive"}, {"/bin/sh"}, {"/usr/bin/hivemind"}, {"/nonexistent/hive"}} {
+		if got, err := hiveTool(spec.Spec{Tools: tools}); err == nil {
+			t.Errorf("tools %q: ran %q", tools, got)
+		}
+	}
+	if got, err := hiveTool(spec.Spec{Tools: []string{"claude", built.fakehive}}); err != nil || got != built.fakehive {
+		t.Errorf("hiveTool = %q, %v", got, err)
 	}
 }

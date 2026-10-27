@@ -40,7 +40,14 @@ It is an optional module, not one of the defaults.
   runner has room, when it was granted a service on this machine (a local
   Ollama), or when the runner refuses or can't be reached before the turn
   starts. A link that drops mid-turn ends the turn there and here (the core
-  treats it like a crashed turn).
+  treats it like a crashed turn). The core has handed the turn over by then
+  and can't take it back, so the module runs it here itself, as the core
+  would have: the hive binary the core named among the turn's tools (an
+  absolute path to `hive`), `hive sandbox-exec --spec F`, with F (it carries
+  the turn's token) written under the module's HOME in `tmp/` (0700) as 0600
+  and removed when the turn ends. module.json declares this. That binary is
+  trusted because the core wrote the spec naming it (its own hive binary);
+  nothing the module or a runner sends chooses it.
 
 ### What crosses, and what doesn't
 
@@ -138,7 +145,7 @@ passes module commands through):
 | `dispatch room` | prints `{"runner": "<name>"}` for the runner with most room, or exits 1 saying why none has |
 | `dispatch turn --spec F [--runner N]` | runs one turn's spec on a runner (the core runs this) |
 | `dispatch key` | the Hive's public key, made the first time |
-| `dispatch add NAME ADDRESS --host-key K` | registers a runner (`ssh://user@host[:port][/path/to/hive-dispatch]`, or `exec:<command>` for a runner on this machine) |
+| `dispatch add NAME ADDRESS --host-key K` | registers a runner (`ssh://user@host[:port][/path/to/hive-dispatch]`)|
 | `dispatch list`, `dispatch status` | runners, their room, the latest turns (`status` reads every runner first) |
 | `dispatch on|off|remove NAME` | |
 
@@ -148,7 +155,8 @@ serve` (what the forced command runs) and `hive-dispatch runner status`.
 ## Tests
 
 `go test ./...` runs a turn end to end through a fake runner on the same
-machine: the real runner, reached through a local command instead of SSH,
+machine: the real runner, reached through a local command instead of SSH (a link
+only the tests can set up: a runner in `runners.json` is always `ssh://`),
 with a stand-in for `hive sandbox-exec` that plays an agent's turn (edits
 and deletes files in the checkout, writes notes and a session, asks the core
 through its mailbox and waits for the answer, writes stderr and an egress
