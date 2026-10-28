@@ -42,12 +42,19 @@ func Dispatchable(s spec.Spec) string {
 	return ""
 }
 
+// IsCheck says s is a check the core hands over (its ID is "gate-..."), not
+// an agent's turn.
+func IsCheck(s spec.Spec) bool { return strings.HasPrefix(s.ID, "gate-") }
+
 // planFor decides how each mount goes across. The turn's own folders go
 // whole; the knowledge base, modules and tools are cached there and sent as
 // changes; other projects and the Hive's records stay here, as empty folders
-// there. Anything a Hide mount covers is never sent.
+// there. Anything a Hide mount covers is never sent. A check's writable
+// folders never come back: the core deletes its checkout and home as soon as
+// it ends, and a test run's build cache in its home is gigabytes.
 func planFor(s spec.Spec) plan {
 	var p plan
+	check := IsCheck(s)
 	kind := func(m spec.Mount) string {
 		switch {
 		case m.Inside == "/hive/projects" || m.Inside == "/hive/state":
@@ -77,6 +84,7 @@ func planFor(s spec.Spec) plan {
 			continue
 		}
 		mp := wire.MountPlan{Inside: m.Inside, RW: m.RW, Kind: kind(m)}
+		mp.Throwaway = check && mp.RW && mp.Kind == wire.KindRun
 		if mp.Kind == wire.KindShared {
 			sum := sha256.Sum256([]byte(m.Host))
 			mp.Key = strings.Trim(strings.ReplaceAll(m.Inside, "/", "_"), "_") + "-" + hex.EncodeToString(sum[:6])
@@ -115,8 +123,8 @@ type Result struct {
 
 // Send runs the turn in s on r. The prompt, the turn's folders and its
 // environment (with the turn's short-lived model token, as a local sandbox
-// gets it) go across; the output, the mailbox and the turn's writable folders
-// come back as it runs and when it ends.
+// gets it) go across; the output and the mailbox come back as it runs, and
+// the turn's writable folders (a check's excepted) when it ends.
 func (h Home) Send(r Runner, s spec.Spec) Result {
 	start := time.Now()
 	res := Result{Placed: Placed{At: start, Run: s.ID, Turn: filepath.Base(s.Stdout), Where: r.Name}}
@@ -251,6 +259,14 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 				return fail(fmt.Errorf("%s sent files for mount %d, which can't take them", r.Name, tr.Mount))
 			}
 			cr := &countReader{r: l.TarReader()}
+			if p.mounts[tr.Mount].Throwaway {
+				// A runner from before Throwaway sends them anyway: read
+				// past them, keeping nothing.
+				if err := wire.Drain(cr); err != nil {
+					return fail(err)
+				}
+				continue
+			}
 			if err := wire.Apply(p.hosts[tr.Mount], tr.Gone, cr); err != nil {
 				return fail(fmt.Errorf("bringing back %s: %w", p.mounts[tr.Mount].Inside, err))
 			}

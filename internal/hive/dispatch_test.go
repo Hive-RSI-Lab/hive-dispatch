@@ -380,3 +380,35 @@ func TestLocalRunsOnlyTheHiveBinary(t *testing.T) {
 		t.Errorf("hiveTool = %q, %v", got, err)
 	}
 }
+
+// A check the core hands over brings back its output and exit code, and
+// nothing of its checkout or home: the core deletes those as it ends.
+func TestCheckBringsBackOnlyOutput(t *testing.T) {
+	w := newWorld(t)
+	w.spec.ID = "gate-test"
+	w.spec.Mounts = []spec.Mount{{Host: w.work, Inside: "/work", RW: true}, {Host: w.rhome, Inside: "/hive/home", RW: true}, {Host: w.tools, Inside: "/hive/tools"}}
+	if code := w.delegate(); code != 1 {
+		t.Fatalf("exit %d, want the check's own 1; err: %s", code, w.read(w.out+".err"))
+	}
+	if out := w.read(w.out); !strings.Contains(out, "got: hello") || !strings.Contains(out, "done") {
+		t.Errorf("check output = %q", out)
+	}
+	if got := w.read(filepath.Join(w.work, "file.txt")); got != "line one\n" {
+		t.Errorf("the checkout came back: file.txt = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(w.work, "gone.txt")); err != nil {
+		t.Error("a deletion there came back here")
+	}
+	for _, p := range []string{filepath.Join(w.work, "new"), filepath.Join(w.rhome, "session.jsonl")} {
+		if _, err := os.Stat(p); err == nil {
+			t.Errorf("%s came back", p)
+		}
+	}
+	ps := w.home.Turns()
+	if len(ps) != 1 || ps[0].Where != "fake" || ps[0].Exit != 1 || ps[0].Sent == 0 || ps[0].Back != 0 {
+		t.Fatalf("turns = %+v", ps)
+	}
+	if ents, _ := os.ReadDir(filepath.Join(w.remote, "turns")); len(ents) != 0 {
+		t.Errorf("the check's folder stayed on the runner: %v", ents)
+	}
+}

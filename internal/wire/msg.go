@@ -16,7 +16,7 @@ import (
 //	Hive    per run or shared mount: J Tree, T..., E
 //	runner  J Started, then O/R output and M mailbox requests as they come;
 //	Hive    I mailbox responses and S (stop) as they come
-//	runner  X ExitCode, then per RW mount: J Tree, T..., E; then Z
+//	runner  X ExitCode, then per RW mount that isn't Throwaway: J Tree, T..., E; then Z
 
 // Hello opens a session.
 type Hello struct {
@@ -52,6 +52,10 @@ type MountPlan struct {
 	Hide   bool   `json:"hide,omitempty"`
 	Kind   string `json:"kind"`
 	Key    string `json:"key,omitempty"` // a shared mount's cache name
+	// Throwaway is an RW run mount whose files don't come back: a check's
+	// checkout and home, which the core deletes as soon as it ends. The
+	// runner wipes it with the rest of the turn.
+	Throwaway bool `json:"throwaway,omitempty"`
 }
 
 // Turn is what the runner needs to run a turn. Spec's host paths are blank;

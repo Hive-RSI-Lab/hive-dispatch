@@ -65,6 +65,12 @@ It is an optional module, not one of the defaults.
   covers (logins, module homes, private) is never read for sending. A turn
   that needs to read other projects or the journal sees nothing there; that
   is the price of not copying the Hive's records to another machine.
+- **A check's folders don't come back.** For a check the core hands over (a
+  spec whose ID starts with `gate-`), only its output (`stdout`, `.err`,
+  `.egress`) and exit code return. Its checkout and home (`/work`,
+  `/hive/home`, where a test run's build cache lands) are wiped on the
+  runner with the rest of the turn, since the core deletes its own copies as
+  soon as the check ends. Its checkout still goes over whole each time.
 - **The link is authenticated both ways and opens from the Hive only.** The
   Hive dials the runner over SSH with a key of its own (kept in the module's
   HOME, which no agent can read), and only to the host key you pinned.

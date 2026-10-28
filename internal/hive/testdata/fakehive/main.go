@@ -82,8 +82,12 @@ func main() {
 	os.WriteFile(filepath.Join(work, "kb-seen.txt"), kb, 0o644)
 	state, _ := os.ReadDir(at["/hive/state"])
 	os.WriteFile(filepath.Join(work, "state-entries.txt"), []byte(fmt.Sprint(len(state))), 0o644)
-	os.WriteFile(filepath.Join(box, "notes.md"), []byte("notes from the turn\n"), 0o644)
 	os.WriteFile(filepath.Join(at["/hive/home"], "session.jsonl"), []byte("session\n"), 0o644)
+	if box == "" { // a check: no box, no mailbox
+		fmt.Fprintln(out, "done")
+		os.Exit(1)
+	}
+	os.WriteFile(filepath.Join(box, "notes.md"), []byte("notes from the turn\n"), 0o644)
 
 	// A mailbox request, answered by the core.
 	os.WriteFile(filepath.Join(box, "outbox", ".r1.tmp"), []byte(`{"id":"r1","op":"progress"}`), 0o644)
