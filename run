@@ -5,7 +5,10 @@
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 bin="$here/bin/dispatch"
-if [ ! -x "$bin" ] || [ -n "$(find "$here/cmd" "$here/internal" "$here/go.mod" -newer "$bin" 2>/dev/null | head -n 1)" ]; then
+stale() {
+	[ ! -x "$bin" ] || [ -n "$(find "$here/cmd" "$here/internal" "$here/go.mod" -newer "$bin" 2>/dev/null | head -n 1)" ]
+}
+build() {
 	if ! command -v go >/dev/null 2>&1; then
 		# The Hive's own Go (hive agent install --tool go) is beside the module's HOME.
 		for d in "$HOME/../../tools/go/bin" /usr/local/go/bin; do
@@ -13,8 +16,27 @@ if [ ! -x "$bin" ] || [ -n "$(find "$here/cmd" "$here/internal" "$here/go.mod" -
 		done
 	fi
 	command -v go >/dev/null 2>&1 || { echo "dispatch: building needs Go 1.23 or later on PATH" >&2; exit 127; }
-	# GOTOOLCHAIN=local: build with the Go found here (go.mod says 1.23, as
-	# above), never one fetched; the module has no dependencies to fetch either.
-	(cd "$here" && CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-mod=readonly GOPROXY=off go build -trimpath -o "$bin.tmp" ./cmd/dispatch && mv "$bin.tmp" "$bin")
+	# Each caller builds to its own tmp and renames it over bin/dispatch in one
+	# step, so callers running at once never share a half-written file or exec
+	# one still open for writing. GOTOOLCHAIN=local: build with the Go found
+	# here (go.mod says 1.23, as above), never one fetched; the module has no
+	# dependencies to fetch either.
+	tmp="$bin.$$.tmp"
+	trap 'rm -f "$tmp"' EXIT
+	(cd "$here" && CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-mod=readonly GOPROXY=off go build -trimpath -o "$tmp" ./cmd/dispatch)
+	mv -f "$tmp" "$bin"
+	trap - EXIT
+}
+if stale; then
+	mkdir -p "$here/bin"
+	if command -v flock >/dev/null 2>&1; then
+		# One build at a time; whoever waited finds it fresh and builds nothing.
+		exec 9>"$here/bin/.build.lock"
+		flock 9
+		if stale; then build; fi
+		exec 9>&-
+	else
+		build
+	fi
 fi
 exec "$bin" "$@"
