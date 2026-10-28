@@ -17,6 +17,11 @@ import (
 // or here, in the Hive's own sandbox, when it can't go (no runner has room,
 // the turn needs this machine, or the runner refused it before it started).
 // Its exit code is the turn's.
+//
+// A check (IsCheck) never runs here: the core handed it over to keep it out
+// of its own check line, so one that can't go is not run at all (NotRun) and
+// gives back no exit marker, which the core reads as "can't run" and puts
+// back in its line here.
 func (h Home) Delegate(specPath, runner string) int {
 	s, err := spec.Read(specPath)
 	os.Remove(specPath) // it carries the turn's token
@@ -24,14 +29,18 @@ func (h Home) Delegate(specPath, runner string) int {
 		fmt.Fprintln(os.Stderr, "dispatch:", err)
 		return 125
 	}
+	here := h.Local
+	if IsCheck(s) {
+		here = h.NotRun
+	}
 	if why := Dispatchable(s); why != "" {
-		return h.Local(s, why)
+		return here(s, why)
 	}
 	var r Runner
 	if runner != "" {
 		r, err = h.Get(runner)
 		if err != nil {
-			return h.Local(s, err.Error())
+			return here(s, err.Error())
 		}
 	} else {
 		var why string
@@ -39,15 +48,29 @@ func (h Home) Delegate(specPath, runner string) int {
 			if err != nil {
 				why = err.Error()
 			}
-			return h.Local(s, why)
+			return here(s, why)
 		}
 	}
 	res := h.Send(r, s)
 	if res.Err != nil && !res.Started {
-		return h.Local(s, res.Err.Error())
+		return here(s, res.Err.Error())
 	}
 	h.Record(res.Placed)
 	return res.Code
+}
+
+// NotRun ends a check that can't go without running it: a check that ran
+// here would run outside the core's check line and past its limit. Nothing
+// reaches the check's stdout, so the core finds no exit marker there and
+// puts the check back in its line. The why goes to its .err and the record.
+func (h Home) NotRun(s spec.Spec, why string) int {
+	msg := "not run: " + why + "; a check never runs here, the core puts it back in its line"
+	if f, err := appendFile(s.Stdout + ".err"); err == nil {
+		fmt.Fprintln(f, "dispatch:", msg)
+		f.Close()
+	}
+	h.Record(Placed{At: time.Now(), Run: s.ID, Turn: filepath.Base(s.Stdout), Where: "nowhere", Exit: 125, Ended: true, Error: msg})
+	return 125
 }
 
 // Local runs s in this machine's sandbox, as the core would have: the core
