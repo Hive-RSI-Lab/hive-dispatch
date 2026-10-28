@@ -17,6 +17,9 @@ import (
 //	runner  J Started, then O/R output and M mailbox requests as they come;
 //	Hive    I mailbox responses and S (stop) as they come
 //	runner  X ExitCode, then per RW mount that isn't Throwaway: J Tree, T..., E; then Z
+//
+// Any J message over MaxFrame goes as B... J: its pieces in Big frames, the
+// last in the J frame.
 
 // Hello opens a session.
 type Hello struct {

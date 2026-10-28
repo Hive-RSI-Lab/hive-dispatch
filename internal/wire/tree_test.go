@@ -2,8 +2,10 @@ package wire
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -107,5 +109,40 @@ func TestFrames(t *testing.T) {
 	got.ReadFrom(c.TarReader())
 	if got.Len() != 3<<20 {
 		t.Fatalf("tar stream of %d bytes, want %d", got.Len(), 3<<20)
+	}
+}
+
+// A runner's manifest of a cached Go SDK runs past MaxFrame: it goes in pieces
+// and comes back whole, with the frames after it untouched.
+func TestBigJSON(t *testing.T) {
+	var buf bytes.Buffer
+	c := New(&buf, &buf)
+	man := Manifests{Mounts: map[int]Manifest{2: {}}}
+	for i := 0; len(man.Mounts[2])*80 < 9<<20; i++ {
+		man.Mounts[2][fmt.Sprintf("go/src/pkg%07d/file.go", i)] = strings.Repeat("f", 40)
+	}
+	if err := c.SendJSON(JSON, man); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() <= MaxFrame+5 {
+		t.Fatalf("message of %d bytes is not over a frame", buf.Len())
+	}
+	c.SendJSON(JSON, Started{OK: true})
+	var got Manifests
+	if err := c.Expect(JSON, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, man) {
+		t.Fatalf("manifest of %d files came back as %d", len(man.Mounts[2]), len(got.Mounts[2]))
+	}
+	var st Started
+	if err := c.Expect(JSON, &st); err != nil || !st.OK {
+		t.Fatalf("%v %+v", err, st)
+	}
+	// A Big frame not ended by a J frame is an error, not a message.
+	c.Send(Big, []byte("{"))
+	c.Send(Out, []byte("x"))
+	if _, _, err := c.Recv(); err == nil {
+		t.Fatal("a Big frame followed by an O frame was taken")
 	}
 }

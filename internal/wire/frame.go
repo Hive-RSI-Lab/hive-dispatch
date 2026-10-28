@@ -20,7 +20,8 @@ const Version = 1
 
 // Frame types.
 const (
-	JSON   = 'J' // a JSON message
+	JSON   = 'J' // a JSON message, or the last piece of one that came in Big frames
+	Big    = 'B' // a piece of a JSON message too big for one frame; a J frame ends it
 	Tar    = 'T' // a chunk of a tar stream
 	End    = 'E' // the end of a tar stream
 	Out    = 'O' // turn stdout
@@ -34,6 +35,10 @@ const (
 
 // MaxFrame bounds one frame's payload.
 const MaxFrame = 4 << 20
+
+// MaxJSON bounds one JSON message sent in pieces (a runner's manifests of its
+// cached mounts run to several MB once it holds the Go SDK).
+const MaxJSON = 1 << 30
 
 // Conn reads and writes frames; writes are safe from several goroutines.
 type Conn struct {
@@ -50,11 +55,16 @@ func (c *Conn) Send(t byte, payload []byte) error {
 	if len(payload) > MaxFrame {
 		return fmt.Errorf("frame of %d bytes is over the limit", len(payload))
 	}
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	return c.write(t, payload)
+}
+
+// write sends one frame; the caller holds wmu.
+func (c *Conn) write(t byte, payload []byte) error {
 	var h [5]byte
 	h[0] = t
 	binary.BigEndian.PutUint32(h[1:], uint32(len(payload)))
-	c.wmu.Lock()
-	defer c.wmu.Unlock()
 	if _, err := c.w.Write(h[:]); err != nil {
 		return err
 	}
@@ -62,17 +72,56 @@ func (c *Conn) Send(t byte, payload []byte) error {
 	return err
 }
 
-// SendJSON writes v as a frame of type t.
+// SendJSON writes v as a frame of type t. A JSON message over MaxFrame goes
+// as Big frames and a last J frame, which Recv puts back together; a peer that
+// predates Big frames couldn't have taken such a message anyway.
 func (c *Conn) SendJSON(t byte, v any) error {
 	raw, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
-	return c.Send(t, raw)
+	if t != JSON || len(raw) <= MaxFrame {
+		return c.Send(t, raw)
+	}
+	if len(raw) > MaxJSON {
+		return fmt.Errorf("JSON message of %d bytes is over the limit", len(raw))
+	}
+	// Hold the lock throughout so no other frame lands between the pieces.
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	for len(raw) > MaxFrame {
+		if err := c.write(Big, raw[:MaxFrame]); err != nil {
+			return err
+		}
+		raw = raw[MaxFrame:]
+	}
+	return c.write(JSON, raw)
 }
 
-// Recv reads one frame.
+// Recv reads one frame; Big frames come back joined with the J frame that
+// ends them.
 func (c *Conn) Recv() (byte, []byte, error) {
+	var big []byte
+	for {
+		t, p, err := c.recv()
+		if err != nil || (t != Big && big == nil) {
+			return t, p, err
+		}
+		if len(big)+len(p) > MaxJSON {
+			return 0, nil, fmt.Errorf("JSON message of over %d bytes is over the limit", MaxJSON)
+		}
+		big = append(big, p...)
+		switch t {
+		case Big:
+		case JSON:
+			return JSON, big, nil
+		default:
+			return 0, nil, fmt.Errorf("frame %q inside a JSON message", t)
+		}
+	}
+}
+
+func (c *Conn) recv() (byte, []byte, error) {
 	var h [5]byte
 	if _, err := io.ReadFull(c.r, h[:]); err != nil {
 		return 0, nil, err
