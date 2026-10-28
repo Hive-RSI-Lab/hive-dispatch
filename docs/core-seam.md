@@ -1,88 +1,79 @@
-# The seam this module needs in the core (ihsan-sa/hive)
+# The core's seam for this module (ihsan-sa/hive)
 
-The module seam (#27) lets a module's program read the journal and call a
-slice of the control API. It has no way for a module to run a turn's sandbox
-spec somewhere else, nor to add a `hive <module> ...` command. These are the
-smallest additions that give it both; they go to ihsan-sa/hive as a pull
-request of their own, filed from this work.
+The core hands turns to this module and gives it a `hive dispatch ...`
+command. Both landed in ihsan-sa/hive with PR #601. In the core's source the
+hook is `internal/mod/runner/executor.go`, with `internal/sandbox/delegate.go`
+and `Runs.launch`/`Runs.executor` in `internal/core/runs.go`. The design is in
+the core's `docs/architecture.md` ("Two seams where the core calls the
+module"). `docs/core.md` says why the hook is core: only launch knows a turn's
+spec and when the machine holds it. This page says what the module relies on.
 
-## 1. An executor hook: a turn's spec handed to a module
+## 1. The executor hook
 
-A module whose manifest lists the hook `executor` can be handed turns. Its
-program answers two commands, run from the module's folder with HOME set to
-the module's home and the same scrubbed environment `runner.start` gives a
-module (no forge or model credentials, no `HIVE_*`):
+The core treats a module as an executor when its manifest lists the hook
+`executor` (this one's does) and the module runner has it `running`. Its
+program answers two commands. Each runs from the module's folder with HOME set
+to the module's home (`<hive>/.hive/modules/dispatch`) and the scrubbed
+environment `runner.Env` gives (no forge or model credentials, no `HIVE_*`):
 
 - `<exec> room`: exit 0 and print `{"runner": "<name>"}` when it can take a
-  turn now; anything else means no. The core waits at most 5 seconds.
-- `<exec> turn --spec <file>`: run the turn in the spec and exit with its exit
-  code, writing its output to the spec's `stdout` (and `.err`, `.egress`) and
-  stopping when the spec's `stop_file` appears, as `hive sandbox-exec` does.
-  It deletes the file once read: it carries the turn's token.
+  turn now. Anything else means no. The core waits at most 5 seconds
+  (`RoomWait`). A "no" stands for 15 seconds and a "yes" for 5, so the work
+  queue's question and the launch after it ask only once. A turn handed over
+  spends the "yes".
+- `<exec> turn --spec <file> --runner <name>`: runs the turn in the spec and
+  exits with its exit code. It writes the turn's output to the spec's `stdout`
+  (and `.err`, `.egress`) and stops when the spec's `stop_file` appears, as
+  `hive sandbox-exec` does. It deletes the file once read, because the file
+  carries the turn's token. `--runner` is the runner `room` named. The module
+  still decides at `turn` and runs the turn here when that runner has filled
+  since.
 
-In `core.Runs.launch`, where it now holds a turn because `Strained(...)` says
-so (and, with a setting, when more runs are queued than it starts at once):
+In `Runs.launch`, a turn the machine is too strained for (`Strained(...)`)
+goes to `rs.executor()` before it is held. That only happens when the local
+sandbox is an isolated one, so the spec is built with inside paths, exactly as
+for the local sandbox. Leads get no pressure hold (only the memory floor), so
+in practice it is workers' turns that come here. With an executor that has
+room, the turn's sandbox is a `sandbox.Delegate`. It writes the spec with
+`writeTempSpec` and starts the module's program detached, its output going to
+the turn's stdout plus `.dispatch`. With no executor, or no room, the turn is
+held as before.
 
-```go
-if why := Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax); why != "" {
-	if ex, where := rs.executor(); ex != nil { // a running executor module that answered `room`
-		sb, elsewhere = ex, where
-	} else {
-		... hold, as now ...
-		return
-	}
-}
-```
+The core watches the delegate's process, drains the mailbox, ends the turn
+when the process exits and reads its output, as for any turn. Before it exits,
+the module brings the turn's files back into the checkout, box and home.
+`run.turn_started` carries `where: "<runner>"` (empty means this machine), and
+the run's row shows "on <runner>". The work queue lets one task per pass go
+past a strained machine while an executor has room. A machine over `load_max`
+alone still holds tasks, since launch would run them here.
 
-`ex` is a `sandbox.Sandbox` like WSL's: `Isolated()` is true (inside paths, so
-the spec is built exactly as for the local sandbox), and `Start(spec)` writes
-the spec with `writeTempSpec` and runs
+Checks never go to an executor: `Delegate.Run` refuses them.
 
-```go
-proc.StartDetached([]string{modDir + "/run", "turn", "--spec", specPath}, moduleEnv(home), modDir, "", turnOut+".dispatch")
-```
+## 2. `hive dispatch ...`
 
-`run.turn_started` gains `where: "<runner>"` (empty is this machine), so the
-record and the dashboard say where each turn ran. Nothing else changes: the
-core watches the delegate's process with `proc.Alive`, drains the mailbox,
-ends the turn when it exits and reads its output as before; the module brings
-the turn's files back into the checkout, box and home before it exits.
-
-`app` wires `rs.executor` from the module registry and the module runner
-(`Runner.Status(name) == "running"` for a module with the hook). Scopes gains
-`"executor": {}`: the hook needs no API paths.
-
-## 2. `hive <module> ...` for a module that asks for it
-
-A manifest with `"command": true` gets `hive <name> <args...>`: the CLI runs
-`<module dir>/<exec[0]> <args...>` attached to the terminal, with the
-module's HOME (`<hive>/.hive/modules/<name>`) and the scrubbed environment.
-That is `hive dispatch add iiks1 ssh://...`, `hive dispatch list`. Until it
-lands, the person runs the module's `run` with `DISPATCH_HOME` set (see
-README).
+The module's manifest sets `"command": true`. That gives `hive dispatch
+<args...>`: the CLI runs `./run <args...>` attached to the terminal, from the
+module's folder, with its own HOME and the scrubbed environment. It does so
+only while the module may run (its review approved the commit it is at). A
+built-in command of the same name wins. That is how `hive dispatch key`,
+`hive dispatch add iiks1 ssh://...` and `hive dispatch list` work. If the
+module can't run, `hive dispatch` says why. The module's `run` with
+`DISPATCH_HOME` set does the same by hand (see [README.md](README.md)).
 
 ## 3. The dashboard
 
-The Modules screen shows each module's latest `module.reported` of kind
-`board` (this module's runners and their room), and a run's row shows
-`where` from its latest `run.turn_started` when it isn't this machine.
+The run's row shows where each turn ran, from `run.turn_started`. The
+runners' board is in the journal as `module.reported` of kind `board`, and
+`hive dispatch list` shows it. The core has no Modules-screen view of it yet.
 
-## Order
+## The fallback here
 
-Install waits on task 261024-174301-2f7050eb10 (module programs run in the
-sandbox with only their declared reach), per the lead's decision. Note for
-that work: this module's `turn` and its program need to reach the runner over
-SSH (outbound TCP to the runner's address, which is on the local network:
-the egress proxy refuses private addresses unless granted), write the turn's
-checkout, box and home, and read the turn's mounts (kb, modules, tools). The
-module declares that reach; it holds no credential but its own SSH key.
-
-## Once module programs are sandboxed
-
-Today `run turn --spec` falls back to the local sandbox itself (it starts the
-spec's `hive sandbox-exec`) when no runner has room or the turn can't go. When
-module programs run in a sandbox (task 261024-174301-2f7050eb10), that nested
-start may not work. Then the fallback should move to the core: `run room`
-already answers before the core hands a turn over, so the core can keep a
-"no room" turn and start it locally as it does now, and `turn` would exit
-without starting anything.
+The core can't take a turn back once it has handed it over, so when the turn
+can't go, `run turn --spec` runs it here itself. That covers no runner with
+room by then, a turn granted a service on this machine, or a runner that
+refused it before starting. It runs the hive binary the core named among the
+turn's tools, `hive sandbox-exec --spec F`, as module.json declares. If
+module programs come to run in a sandbox where that nested start doesn't
+work, the fallback moves to the core. `room` already answers before the core
+hands a turn over, so the core can keep a "no room" turn and start it locally,
+and `turn` would exit without starting anything.
