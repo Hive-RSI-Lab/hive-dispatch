@@ -1,3 +1,12 @@
 {
-  "test": "go test ./..."
+  "test": "go test ./...",
+  "score": {
+    "command": "go run ./cmd/dispatch score",
+    "direction": "higher",
+    "tolerance": 0,
+    "paths": [
+      "cmd/dispatch/",
+      "internal/hive/module.go"
+    ]
+  }
 }
