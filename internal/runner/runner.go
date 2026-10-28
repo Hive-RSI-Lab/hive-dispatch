@@ -242,7 +242,7 @@ func turn(cfg Config, c *wire.Conn) error {
 	}
 	base := map[int]wire.Manifest{}
 	for i, m := range t.Mounts {
-		if m.RW && m.Kind == wire.KindRun {
+		if back(m) {
 			if base[i], err = wire.Scan(hosts[i], skipFor(m)); err != nil {
 				return err
 			}
@@ -368,7 +368,7 @@ loop:
 		return err
 	}
 	for i, m := range t.Mounts {
-		if !(m.RW && m.Kind == wire.KindRun) {
+		if !back(m) {
 			continue
 		}
 		cur, err := wire.Scan(hosts[i], skipFor(m))
@@ -381,6 +381,9 @@ loop:
 	}
 	return c.Send(wire.Done, nil)
 }
+
+// back says the mount's files go back to the Hive when the turn ends.
+func back(m wire.MountPlan) bool { return m.RW && m.Kind == wire.KindRun && !m.Throwaway }
 
 // sent lists the mounts the Hive sends a tree for, in order.
 func sent(ms []wire.MountPlan) []int {
