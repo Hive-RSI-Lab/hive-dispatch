@@ -71,6 +71,19 @@ It is an optional module, not one of the defaults.
   `/hive/home`, where a test run's build cache lands) are wiped on the
   runner with the rest of the turn, since the core deletes its own copies as
   soon as the check ends. Its checkout still goes over whole each time.
+- **Checks: the `checks` hook.** module.json lists `checks` next to
+  `executor`, so the core hands this module a project's test check when its
+  check line here would make it wait and a runner has room. `turn` runs the
+  check's command on the runner and streams its stdout back unchanged; the
+  core wrapped that command so its last line is `hive-check-exit <nonce>
+  <code>`, and takes the verdict from that line, never from `turn`'s exit.
+- **A check never runs here.** A turn that can't go runs here in the Hive's
+  own sandbox, but a check that can't go (no runner has room by then, it was
+  granted a service on this machine, or the runner refused it before
+  starting) is not run at all: run here it would sit outside the core's check
+  line and past its limit. `turn` writes why to the check's `.err`, records
+  it as on `nowhere`, and exits 125 with no marker, so the core reads "can't
+  run" and puts the check back in its line.
 - **The link is authenticated both ways and opens from the Hive only.** The
   Hive dials the runner over SSH with a key of its own (kept in the module's
   HOME, which no agent can read), and only to the host key you pinned.

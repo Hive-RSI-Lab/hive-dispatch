@@ -83,8 +83,9 @@ func main() {
 	state, _ := os.ReadDir(at["/hive/state"])
 	os.WriteFile(filepath.Join(work, "state-entries.txt"), []byte(fmt.Sprint(len(state))), 0o644)
 	os.WriteFile(filepath.Join(at["/hive/home"], "session.jsonl"), []byte("session\n"), 0o644)
-	if box == "" { // a check: no box, no mailbox
+	if box == "" { // a check: no box, no mailbox; it ends with the core's exit marker
 		fmt.Fprintln(out, "done")
+		fmt.Fprintf(out, "\nhive-check-exit %s 1\n", s.ID)
 		os.Exit(1)
 	}
 	os.WriteFile(filepath.Join(box, "notes.md"), []byte("notes from the turn\n"), 0o644)

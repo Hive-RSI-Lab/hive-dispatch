@@ -119,7 +119,7 @@ type Placed struct {
 	At    time.Time `json:"at"`
 	Run   string    `json:"run"`
 	Turn  string    `json:"turn"`
-	Where string    `json:"where"`         // a runner's name, or "local"
+	Where string    `json:"where"`         // a runner's name, "local", or "nowhere" (a check not run)
 	Why   string    `json:"why,omitempty"` // why it ran locally after all
 	Exit  int       `json:"exit"`
 	Secs  float64   `json:"secs"`

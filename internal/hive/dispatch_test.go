@@ -390,8 +390,8 @@ func TestCheckBringsBackOnlyOutput(t *testing.T) {
 	if code := w.delegate(); code != 1 {
 		t.Fatalf("exit %d, want the check's own 1; err: %s", code, w.read(w.out+".err"))
 	}
-	if out := w.read(w.out); !strings.Contains(out, "got: hello") || !strings.Contains(out, "done") {
-		t.Errorf("check output = %q", out)
+	if out := w.read(w.out); !strings.Contains(out, "got: hello") || !strings.HasSuffix(out, "done\n\nhive-check-exit gate-test 1\n") {
+		t.Errorf("check output = %q, want it to end with the core's exit marker unchanged", out)
 	}
 	if got := w.read(filepath.Join(w.work, "file.txt")); got != "line one\n" {
 		t.Errorf("the checkout came back: file.txt = %q", got)
@@ -410,5 +410,44 @@ func TestCheckBringsBackOnlyOutput(t *testing.T) {
 	}
 	if ents, _ := os.ReadDir(filepath.Join(w.remote, "turns")); len(ents) != 0 {
 		t.Errorf("the check's folder stayed on the runner: %v", ents)
+	}
+}
+
+// A check that can't go is never run here: it would run outside the core's
+// check line. It exits without output, so the core finds no exit marker and
+// puts it back in its line.
+func TestCheckNeverRunsHere(t *testing.T) {
+	for name, edit := range map[string]func(w *world){
+		"granted a local service": func(w *world) { w.spec.Local = []string{"127.0.0.1:11434"} },
+		"runner unreachable": func(w *world) {
+			w.home.Add(Runner{Name: "fake", Address: localRunner("/nonexistent/runner")}, testHostKey)
+		},
+		"runner has no sandbox": func(w *world) {
+			w.home.Add(Runner{Name: "fake", Address: localRunner(built.dispatch + " runner serve --config /nonexistent --max 1 --dir " + w.remote + " --hive /nonexistent/hive"), MinFreeMB: 1, MaxLoad: 1000}, testHostKey)
+		},
+		"no runner": func(w *world) { w.home.Remove("fake") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t)
+			w.spec.ID = "gate-test"
+			w.spec.Mounts = []spec.Mount{{Host: w.work, Inside: "/work", RW: true}, {Host: w.rhome, Inside: "/hive/home", RW: true}, {Host: w.tools, Inside: "/hive/tools"}}
+			edit(w)
+			if code := w.delegate(); code != 125 {
+				t.Fatalf("exit %d, want 125", code)
+			}
+			if raw, _ := os.ReadFile(w.out); strings.Contains(string(raw), "hive-check-exit") || strings.Contains(string(raw), "got:") {
+				t.Errorf("the check ran: %q", raw)
+			}
+			if got := w.read(w.out + ".err"); !strings.Contains(got, "not run") {
+				t.Errorf(".err = %q", got)
+			}
+			ps := w.home.Turns()
+			if len(ps) != 1 || ps[0].Where != "nowhere" || ps[0].Exit != 125 || !ps[0].Ended {
+				t.Fatalf("turns = %+v", ps)
+			}
+			if got := w.home.Score(time.Now()); got != 0 {
+				t.Errorf("score = %d", got)
+			}
+		})
 	}
 }
