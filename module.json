@@ -2,5 +2,6 @@
   "name": "dispatch",
   "description": "Runs some agent turns on another machine the person owns (first: iiks1) when this one is strained: the core hands a turn's sandbox spec to `run turn --spec`, which sends it over SSH (the module's own key, the runner's pinned host key; runners are ssh:// addresses only) to a runner that runs it in the hive binary's own sandbox there, and brings its output, mailbox and files back into the turn's own folders. The core can't take a handed-over turn back, so when it can't go (no runner has room by then, it needs this machine, or the runner refused it before starting) it runs here as the core would have: the hive binary the core named among the turn's tools, `hive sandbox-exec --spec F`, with F written under HOME/tmp as 0600 and removed after. Its program reads each runner's room and reports the board and where each turn ran. It runs ssh, ssh-keygen and that hive sandbox-exec and nothing else; `run` builds it once with the Go on PATH or the Hive's own (GOTOOLCHAIN=local, GOPROXY=off: nothing fetched). It keeps its key, the pinned host keys and its records in its HOME.",
   "exec": ["./run"],
-  "hooks": ["status", "executor"]
+  "hooks": ["status", "executor"],
+  "command": true
 }

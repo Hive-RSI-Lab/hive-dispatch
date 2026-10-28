@@ -32,7 +32,9 @@ It is an optional module, not one of the defaults.
   `<module>/run turn --spec <file>` (as it runs `hive sandbox-exec --spec`).
   The turn's process lives on this machine for as long as the remote turn
   runs, so the core watches it, stops it and reads its output unchanged.
-  That seam is not in the core yet: see [core-seam.md](core-seam.md).
+  The core does this for a turn it would otherwise hold for strain, after
+  asking `run room` (it waits at most 5 seconds). The hook has been in the
+  core since ihsan-sa/hive#601: see [core-seam.md](core-seam.md).
 - **Where each turn ran** is in the module's `turns.jsonl` and reported to the
   Hive's journal (`module.reported`, kind `turn`), with the runners' room
   (kind `board`) every time it changes. `dispatch list` shows both.
@@ -78,12 +80,14 @@ It is an optional module, not one of the defaults.
 ## Setting up a second machine
 
 You need: SSH from the main machine to the other one, and on the other
-machine a Linux user to run turns as (your own is fine), Go 1.23+ to build
-(or copy a built binary), and the hive binary.
+machine a separate non-admin Linux user to run turns as (below:
+`hive-runner`), Go 1.23+ to build (or copy a built binary), and the hive
+binary.
 
-**1. On the other machine (iiks1)**, install the hive binary the same way as
-on the main one (the installer, or copy `~/.local/bin/hive`), with the same
-release, and check its sandbox works:
+**1. On the other machine (iiks1)**, as `hive-runner`, install the hive binary
+with the same release as the main machine (v0.1.136 or later: the installer,
+or copy `~/.local/bin/hive` from the main machine), and check its sandbox
+works:
 
 ```sh
 hive sandbox-probe           # should print: ok <sandbox>
@@ -98,17 +102,22 @@ go build -o ~/.local/bin/hive-dispatch ./cmd/dispatch
 ```
 
 Make sure the SSH server runs (`sudo apt install openssh-server`) and the main
-machine can reach it (same network, or Tailscale).
+machine can reach iiks1 (over Tailscale, or the same network).
 
-**2. On the main machine**, install the module and print the Hive's key:
+**2. On the main machine**, print the Hive's public key (the module makes it
+the first time):
 
 ```sh
-hive module add dispatch     # or ask the lead
-hive dispatch key            # until the core's command seam lands:
-                             #   DISPATCH_HOME=~/hive/.hive/modules/dispatch ~/hive/.modules/dispatch/run key
+hive dispatch key
 ```
 
-**3. On the other machine**, register the Hive's key, held to the runner:
+If the module isn't installed yet, `hive module add dispatch` first (or ask
+the lead). If `hive dispatch` isn't available yet, use
+`DISPATCH_HOME=~/hive/.hive/modules/dispatch ~/hive/.modules/dispatch/run key`.
+If it says the module can't run, its review hasn't approved its current
+commit yet.
+
+**3. On the other machine**, as `hive-runner`, register the Hive's key, held to the runner:
 
 ```sh
 hive-dispatch runner setup --name iiks1 --hive "$(command -v hive)" --hive-key "ssh-ed25519 AAAA... hive-dispatch" --install
@@ -122,9 +131,14 @@ and prints the command for the last step with this machine's host key.
 **4. On the main machine**, run what setup printed:
 
 ```sh
-hive dispatch add iiks1 ssh://ihsan@iiks1 --host-key "ssh-ed25519 AAAA..."
+hive dispatch add iiks1 ssh://hive-runner@iiks1 --host-key "ssh-ed25519 AAAA..."
 hive dispatch list           # iiks1: 0/3 turns, load 0.0 on 6 cores, ...
 ```
+
+What this grants: the Hive's key can run only the runner command on iiks1
+(`command="... runner serve",restrict` in `authorized_keys`). It gets no
+shell, no terminal and no port forwarding. Turns there run in the Hive's own
+sandbox and can't reach iiks1's local services.
 
 `add` reads the runner's room at once. A runner has room while it has a free
 turn slot, its load per core is under 0.75 (`--max-load`) and it has 4 GB free
@@ -136,8 +150,7 @@ To take the Hive's key off iiks1, delete its line from
 
 ## Commands
 
-On the main machine (the module, run as `hive dispatch ...` once the core
-passes module commands through):
+On the main machine (the module, run as `hive dispatch ...`):
 
 | command | does |
 | --- | --- |
