@@ -147,6 +147,7 @@ passes module commands through):
 | `dispatch key` | the Hive's public key, made the first time |
 | `dispatch add NAME ADDRESS --host-key K` | registers a runner (`ssh://user@host[:port][/path/to/hive-dispatch]`)|
 | `dispatch list`, `dispatch status` | runners, their room, the latest turns (`status` reads every runner first) |
+| `dispatch score` | the project's score (`.hive/project.json`): turns a runner ran that ended with exit 0 in the last 24 hours, by when they ended; 0 with no records |
 | `dispatch on|off|remove NAME` | |
 
 On the other machine: `hive-dispatch runner setup`, `hive-dispatch runner

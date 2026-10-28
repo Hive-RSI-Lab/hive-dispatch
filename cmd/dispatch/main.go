@@ -11,6 +11,7 @@
 //	dispatch remove NAME | off NAME | on NAME
 //	dispatch list                    the runners, their room and the latest turns
 //	dispatch status                  reads every runner now
+//	dispatch score                   turns a runner ran and ended ok in the last 24 hours
 //
 // On the other machine, installed as hive-dispatch:
 //
@@ -26,6 +27,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/Hive-RSI-Lab/hive-dispatch/internal/hive"
 	"github.com/Hive-RSI-Lab/hive-dispatch/internal/runner"
@@ -43,6 +45,15 @@ func run(args []string) int {
 	}
 	if args[0] == "runner" {
 		return runnerCmd(args[1:])
+	}
+	if args[0] == "score" {
+		// The project's score: no module folder or no records reads 0.
+		n := 0
+		if h, err := home(); err == nil {
+			n = h.Score(time.Now())
+		}
+		fmt.Println(n)
+		return 0
 	}
 	h, err := home()
 	if err != nil {
