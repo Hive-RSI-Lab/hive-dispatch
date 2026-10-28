@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Hive-RSI-Lab/hive-dispatch/internal/hive"
@@ -215,17 +216,25 @@ func runnerCmd(args []string) int {
 
 // home is the module's folder: the HOME the Hive's module runner gives it,
 // or DISPATCH_HOME for the person running it by hand.
-func home() (hive.Home, error) {
-	if d := os.Getenv("DISPATCH_HOME"); d != "" {
+func home() (hive.Home, error) { return homeFrom(os.Getenv) }
+
+func homeFrom(getenv func(string) string) (hive.Home, error) {
+	if d := getenv("DISPATCH_HOME"); d != "" {
 		return hive.Home(d), nil
 	}
-	if os.Getenv("HIVE_MODULE") != "" || os.Getenv("HIVE_DISPATCH") != "" {
-		return hive.Home(os.Getenv("HOME")), nil
+	h := getenv("HOME")
+	if getenv("HIVE_MODULE") != "" || getenv("HIVE_DISPATCH") != "" {
+		return hive.Home(h), nil
 	}
-	if d := os.Getenv("HIVE_HOME"); d != "" {
+	// The core runs `room`, `turn` and `hive dispatch ...` with the module's
+	// folder as HOME and no HIVE_ variables (runner.Env scrubs them): until
+	// this, every `room` failed here and no turn ever went to a runner.
+	if h != "" && strings.HasSuffix(filepath.Clean(h), filepath.Join(".hive", "modules", "dispatch")) {
+		return hive.Home(filepath.Clean(h)), nil
+	}
+	if d := getenv("HIVE_HOME"); d != "" {
 		return hive.Home(filepath.Join(d, ".hive", "modules", "dispatch")), nil
 	}
-	h, _ := os.UserHomeDir()
 	d := filepath.Join(h, "hive", ".hive", "modules", "dispatch")
 	if _, err := os.Stat(filepath.Dir(d)); err != nil {
 		return "", errors.New("can't find the dispatch module's folder: set DISPATCH_HOME to <your hive>/.hive/modules/dispatch")
