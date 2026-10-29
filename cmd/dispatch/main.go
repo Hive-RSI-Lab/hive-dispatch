@@ -109,7 +109,7 @@ func run(args []string) int {
 		if w := r.Room(s); w != "" {
 			fmt.Printf("it has no room yet: %s\n", w)
 		} else {
-			fmt.Printf("it has room: %d of %d turns running, load %.1f on %d cores\n", s.Running, s.Max, s.Load1, s.Cores)
+			fmt.Printf("it has room: %d turns running, load %.1f on %d cores, %d MB free\n", s.Running, s.Load1, s.Cores, s.MemFreeMB)
 		}
 		return 0
 	case "remove":
@@ -173,7 +173,9 @@ func runnerCmd(args []string) int {
 	name := fs.String("name", "", "this machine's name in the Hive")
 	dir := fs.String("dir", "", "where turns and the cache live")
 	hiveBin := fs.String("hive", "", "the hive binary that runs the sandbox")
-	maxTurns := fs.Int("max", 0, "turns at once (default half the cores)")
+	maxTurns := fs.Int("max", 0, "a fixed cap on turns at once besides load and memory (default none)")
+	maxLoad := fs.Float64("max-load", 0, "take no turn while load per core is over this (default 0.75)")
+	minFree := fs.Int("min-free-mb", 0, "take no turn while less memory is free (default 4096)")
 	hiveKey := fs.String("hive-key", "", "setup: the Hive's public key (`dispatch key` on the Hive's machine)")
 	install := fs.Bool("install", false, "setup: add the Hive's key to ~/.ssh/authorized_keys")
 	if fs.Parse(args[1:]) != nil {
@@ -193,6 +195,12 @@ func runnerCmd(args []string) int {
 	}
 	if *maxTurns > 0 {
 		cfg.Max = *maxTurns
+	}
+	if *maxLoad > 0 {
+		cfg.MaxLoad = *maxLoad
+	}
+	if *minFree > 0 {
+		cfg.MinFreeMB = *minFree
 	}
 	switch args[0] {
 	case "serve":

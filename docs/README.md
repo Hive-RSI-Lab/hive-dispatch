@@ -142,16 +142,16 @@ commit yet.
 hive-dispatch runner setup --name iiks1 --hive "$(command -v hive)" --hive-key "ssh-ed25519 AAAA... hive-dispatch" --install
 ```
 
-It saves `~/.config/hive-dispatch/runner.json` (name, how many turns at once,
-default half the cores, where turns live, default
-`~/.local/share/hive-dispatch`), adds one line to `~/.ssh/authorized_keys`,
+It saves `~/.config/hive-dispatch/runner.json` (name, where turns live,
+default `~/.local/share/hive-dispatch`, and the room it keeps: `max_load`
+per core, default 0.75, and `min_free_mb`, default 4096), adds one line to `~/.ssh/authorized_keys`,
 and prints the command for the last step with this machine's host key.
 
 **4. On the main machine**, run what setup printed:
 
 ```sh
 hive dispatch add iiks1 ssh://hive-runner@iiks1 --host-key "ssh-ed25519 AAAA..."
-hive dispatch list           # iiks1: 0/3 turns, load 0.0 on 6 cores, ...
+hive dispatch list           # iiks1: 0 turns, load 0.0 on 6 cores, ...
 ```
 
 What this grants: the Hive's key can run only the runner command on iiks1
@@ -159,9 +159,13 @@ What this grants: the Hive's key can run only the runner command on iiks1
 shell, no terminal and no port forwarding. Turns there run in the Hive's own
 sandbox and can't reach iiks1's local services.
 
-`add` reads the runner's room at once. A runner has room while it has a free
-turn slot, its load per core is under 0.75 (`--max-load`) and it has 4 GB free
-(`--min-free-mb`). `hive dispatch off iiks1` stops offering it turns without
+`add` reads the runner's room at once. A runner has room while its load per
+core is under 0.75 (`--max-load`) and it has 4 GB free (`--min-free-mb`); there
+is no fixed number of turns. The runner checks again as each turn arrives, by
+its own `max_load` and `min_free_mb`, and counts a turn that started in the
+last two minutes as one core and 1 GB until the load average catches up. A
+person who wants a fixed cap besides sets `max_turns` in runner.json (or
+`runner serve --max N`); the `max` key older setups wrote is ignored. `hive dispatch off iiks1` stops offering it turns without
 removing it; `hive dispatch remove iiks1` forgets it and its host key.
 
 To take the Hive's key off iiks1, delete its line from

@@ -28,12 +28,32 @@ import (
 
 // Config is the runner's own settings, set by the person on its machine.
 type Config struct {
-	Name  string            `json:"name"`
-	Dir   string            `json:"dir"`   // where turns and the shared cache live
-	Hive  string            `json:"hive"`  // the hive binary that runs sandbox-exec
-	Max   int               `json:"max"`   // turns at once; 0 is half the cores
-	Tools map[string]string `json:"tools"` // tool name -> path on this machine, where it isn't on PATH
+	Name string `json:"name"`
+	Dir  string `json:"dir"`  // where turns and the shared cache live
+	Hive string `json:"hive"` // the hive binary that runs sandbox-exec
+	// The runner takes a turn while its load per core is under MaxLoad and it
+	// has MinFreeMB of memory free, counting turns that started in the last
+	// two minutes as a core and a GB each (the load average lags). Max, when
+	// set, is a fixed cap on turns at once besides; 0 is none.
+	MaxLoad   float64           `json:"max_load,omitempty"`
+	MinFreeMB int               `json:"min_free_mb,omitempty"`
+	Max       int               `json:"max_turns,omitempty"`
+	Tools     map[string]string `json:"tools"` // tool name -> path on this machine, where it isn't on PATH
 }
+
+// Defaults for a runner's room, the same the Hive holds it to.
+const (
+	DefaultMaxLoad   = 0.75
+	DefaultMinFreeMB = 4096
+)
+
+// A turn that started within Young counts as YoungLoad of load and YoungMB
+// of memory, until the load average and the memory reading have caught up.
+const (
+	Young     = 2 * time.Minute
+	YoungLoad = 1.0
+	YoungMB   = 1024
+)
 
 // Defaults fills what the person left out.
 func (c *Config) Defaults() {
@@ -50,8 +70,11 @@ func (c *Config) Defaults() {
 			c.Hive = p
 		}
 	}
-	if c.Max <= 0 {
-		c.Max = max(1, runtime.NumCPU()/2)
+	if c.MaxLoad <= 0 {
+		c.MaxLoad = DefaultMaxLoad
+	}
+	if c.MinFreeMB <= 0 {
+		c.MinFreeMB = DefaultMinFreeMB
 	}
 }
 
@@ -78,16 +101,40 @@ func Serve(cfg Config, r io.Reader, w io.Writer) error {
 // Room reads this machine's room.
 func Room(cfg Config) wire.Status {
 	cfg.Defaults()
-	st := wire.Status{Name: cfg.Name, Version: wire.Version, Cores: runtime.NumCPU(), Max: cfg.Max, Running: running(cfg)}
+	st := wire.Status{Name: cfg.Name, Version: wire.Version, Cores: runtime.NumCPU(), Max: cfg.Max}
 	st.MemTotalMB = int(memField("MemTotal:") / 1024)
-	st.MemFreeMB = int(memField("MemAvailable:") / 1024)
-	if raw, err := os.ReadFile("/proc/loadavg"); err == nil {
-		if f := strings.Fields(string(raw)); len(f) > 0 {
-			st.Load1, _ = strconv.ParseFloat(f[0], 64)
-		}
-	}
+	st.MemFreeMB, st.Load1 = readRoom()
+	st.Running = running(cfg)
 	st.Sandbox = probe(cfg)
 	return st
+}
+
+// readRoom reads the memory free and the load now.
+func readRoom() (freeMB int, load1 float64) {
+	freeMB = int(memField("MemAvailable:") / 1024)
+	if raw, err := os.ReadFile("/proc/loadavg"); err == nil {
+		if f := strings.Fields(string(raw)); len(f) > 0 {
+			load1, _ = strconv.ParseFloat(f[0], 64)
+		}
+	}
+	return freeMB, load1
+}
+
+// full says why one more turn doesn't fit: n turns run, young of them
+// started within Young, on a machine with freeMB free and load1 on cores.
+// "" is room.
+func full(cfg Config, n, young, freeMB int, load1 float64, cores int) string {
+	load := load1 + float64(young)*YoungLoad
+	free := freeMB - young*YoungMB
+	switch {
+	case cfg.Max > 0 && n >= cfg.Max:
+		return fmt.Sprintf("full (%d of %d turns running)", n, cfg.Max)
+	case cores > 0 && load/float64(cores) > cfg.MaxLoad:
+		return fmt.Sprintf("loaded (%.1f on %d cores, %d turns running, %d just started)", load, cores, n, young)
+	case free < cfg.MinFreeMB:
+		return fmt.Sprintf("low on memory (%d MB free, %d turns running, %d just started)", free, n, young)
+	}
+	return ""
 }
 
 func memField(key string) float64 {
@@ -130,7 +177,8 @@ func running(cfg Config) int {
 		return 0
 	}
 	defer all.Close()
-	return count(cfg)
+	n, _ := count(cfg)
+	return n
 }
 
 // claim takes a folder and a place for one more turn, if there is room.
@@ -141,8 +189,10 @@ func claim(cfg Config, name string) (string, *os.File, error) {
 		return "", nil, err
 	}
 	defer all.Close()
-	if n := count(cfg); n >= cfg.Max {
-		return "", nil, fmt.Errorf("full (%d of %d turns running)", n, cfg.Max)
+	n, young := count(cfg)
+	freeMB, load1 := readRoom()
+	if why := full(cfg, n, young, freeMB, load1, runtime.NumCPU()); why != "" {
+		return "", nil, errors.New(why)
 	}
 	dir, err := os.MkdirTemp(filepath.Join(cfg.Dir, "turns"), name+"-")
 	if err != nil {
@@ -156,20 +206,23 @@ func claim(cfg Config, name string) (string, *os.File, error) {
 	return dir, l, nil
 }
 
-// count is running's count, under the turns lock.
-func count(cfg Config) int {
+// count is running's count, under the turns lock, and how many of those
+// started within Young.
+func count(cfg Config) (n, young int) {
 	dirs, _ := filepath.Glob(filepath.Join(cfg.Dir, "turns", "*"))
-	n := 0
 	for _, d := range dirs {
 		l, err := tryLock(filepath.Join(d, "lock"))
 		if err != nil {
 			n++
+			if fi, err := os.Stat(filepath.Join(d, "lock")); err == nil && time.Since(fi.ModTime()) < Young {
+				young++
+			}
 			continue
 		}
 		os.RemoveAll(d)
 		l.Close()
 	}
-	return n
+	return n, young
 }
 
 var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]`)

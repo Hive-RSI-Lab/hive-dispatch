@@ -90,7 +90,7 @@ func newWorld(t *testing.T) *world {
 		Tools: []string{built.fakehive, "claude"}, Stdin: filepath.Join(host, "turn-001.prompt"), Stdout: w.out,
 		StopFile: filepath.Join(host, "stop"), Network: true,
 	}
-	addr := localRunner(built.dispatch + " runner serve --config /nonexistent --name fake --max 2 --dir " + w.remote + " --hive " + built.fakehive)
+	addr := localRunner(built.dispatch + " runner serve --config /nonexistent --name fake --max 2 --max-load 1000 --min-free-mb 1 --dir " + w.remote + " --hive " + built.fakehive)
 	if err := w.home.Add(Runner{Name: "fake", Address: addr, MinFreeMB: 1, MaxLoad: 1000}, testHostKey); err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestFallsBackHere(t *testing.T) {
 			w.home.Add(Runner{Name: "fake", Address: localRunner("/nonexistent/runner")}, testHostKey)
 		},
 		"runner has no sandbox": func(w *world) {
-			w.home.Add(Runner{Name: "fake", Address: localRunner(built.dispatch + " runner serve --config /nonexistent --max 1 --dir " + w.remote + " --hive /nonexistent/hive"), MinFreeMB: 1, MaxLoad: 1000}, testHostKey)
+			w.home.Add(Runner{Name: "fake", Address: localRunner(built.dispatch + " runner serve --config /nonexistent --max 1 --max-load 1000 --min-free-mb 1 --dir " + w.remote + " --hive /nonexistent/hive"), MinFreeMB: 1, MaxLoad: 1000}, testHostKey)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -314,7 +314,8 @@ func TestRoom(t *testing.T) {
 		want string
 	}{
 		{"room", func(*Seen) {}, ""},
-		{"full", func(s *Seen) { s.Running = 3 }, "full"},
+		{"full at a fixed cap", func(s *Seen) { s.Running = 3 }, "full"},
+		{"no fixed cap", func(s *Seen) { s.Max, s.Running = 0, 12 }, ""},
 		{"loaded", func(s *Seen) { s.Load1 = 5 }, "loaded"},
 		{"low memory", func(s *Seen) { s.MemFreeMB = 1000 }, "memory"},
 		{"no sandbox", func(s *Seen) { s.Sandbox = "unavailable: no bwrap" }, "sandbox"},
@@ -329,7 +330,7 @@ func TestRoom(t *testing.T) {
 	}
 	h.Save([]Runner{{Name: "busy", Address: "ssh://u@x"}, {Name: "idle", Address: "ssh://u@x"}, {Name: "off", Address: "ssh://u@x", Off: true}})
 	busy, idle := ok, ok
-	busy.Running = 2
+	busy.Running, busy.Load1 = 2, 2
 	h.See("busy", Seen{Status: busy, At: time.Now()})
 	h.See("idle", Seen{Status: idle, At: time.Now()})
 	if r, why, err := h.Pick(); err != nil || r.Name != "idle" {
@@ -444,7 +445,7 @@ func TestCheckNeverRunsHere(t *testing.T) {
 			w.home.Add(Runner{Name: "fake", Address: localRunner("/nonexistent/runner")}, testHostKey)
 		},
 		"runner has no sandbox": func(w *world) {
-			w.home.Add(Runner{Name: "fake", Address: localRunner(built.dispatch + " runner serve --config /nonexistent --max 1 --dir " + w.remote + " --hive /nonexistent/hive"), MinFreeMB: 1, MaxLoad: 1000}, testHostKey)
+			w.home.Add(Runner{Name: "fake", Address: localRunner(built.dispatch + " runner serve --config /nonexistent --max 1 --max-load 1000 --min-free-mb 1 --dir " + w.remote + " --hive /nonexistent/hive"), MinFreeMB: 1, MaxLoad: 1000}, testHostKey)
 		},
 		"no runner": func(w *world) { w.home.Remove("fake") },
 	} {
