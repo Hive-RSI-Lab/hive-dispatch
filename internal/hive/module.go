@@ -123,6 +123,9 @@ func (h Home) Board(turns int) []string {
 		if ok {
 			line += " (read " + s.At.Format("15:04:05") + ")"
 		}
+		if lack := h.Lacks(r.Name); len(lack) > 0 {
+			line += "; turns needing " + strings.Join(lack, ", ") + " run here: it hasn't them"
+		}
 		out = append(out, line)
 	}
 	ps := h.Turns()

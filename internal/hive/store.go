@@ -160,3 +160,38 @@ func writeAtomic(path string, raw []byte) error {
 	}
 	return os.Rename(tmp, path)
 }
+
+// LackFor is how long a runner that lacked a turn's tool is passed over for
+// turns that need it, before one is tried there again (the person may have
+// installed it since).
+const LackFor = time.Hour
+
+// Lack records that runner hasn't the tools named.
+func (h Home) Lack(runner string, tools []string) error {
+	have := h.lacks(runner)
+	for _, t := range tools {
+		have[t] = time.Now()
+	}
+	raw, _ := json.Marshal(have)
+	return writeAtomic(h.path("lacks", runner+".json"), raw)
+}
+
+// Lacks is the tools runner lacked within LackFor, by name, sorted.
+func (h Home) Lacks(runner string) []string {
+	var out []string
+	for t, at := range h.lacks(runner) {
+		if time.Since(at) < LackFor {
+			out = append(out, t)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (h Home) lacks(runner string) map[string]time.Time {
+	m := map[string]time.Time{}
+	if raw, err := os.ReadFile(h.path("lacks", runner+".json")); err == nil {
+		json.Unmarshal(raw, &m)
+	}
+	return m
+}

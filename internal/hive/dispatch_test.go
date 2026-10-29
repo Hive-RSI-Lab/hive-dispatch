@@ -90,6 +90,12 @@ func newWorld(t *testing.T) *world {
 		Tools: []string{built.fakehive, "claude"}, Stdin: filepath.Join(host, "turn-001.prompt"), Stdout: w.out,
 		StopFile: filepath.Join(host, "stop"), Network: true,
 	}
+	// The harness the turn names, on the PATH the runner (this machine) sees.
+	bin := p("bin")
+	os.MkdirAll(bin, 0o755)
+	write(filepath.Join(bin, "claude"), "#!/bin/sh\n")
+	os.Chmod(filepath.Join(bin, "claude"), 0o755)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	addr := localRunner(built.dispatch + " runner serve --config /nonexistent --name fake --max 2 --max-load 1000 --min-free-mb 1 --dir " + w.remote + " --hive " + built.fakehive)
 	if err := w.home.Add(Runner{Name: "fake", Address: addr, MinFreeMB: 1, MaxLoad: 1000}, testHostKey); err != nil {
 		t.Fatal(err)
@@ -302,6 +308,59 @@ func TestLocalFindsBareTools(t *testing.T) {
 	}
 	if want := "tools: " + built.fakehive + " " + claude + " nowhere-tool\n"; !strings.Contains(w.read(w.out), want) {
 		t.Errorf("sandbox-exec got:\n%s\nwant a line %q", w.read(w.out), want)
+	}
+}
+
+// A turn whose harness the runner hasn't runs here: a runner that checks
+// refuses it before taking a place, and one from before that check (its
+// sandbox ends it 'tool "x" not found', exit 125, before anything ran) is
+// read the same way. Either way the next turn needing that tool isn't sent
+// there at all.
+func TestTurnWhoseHarnessTheRunnerHasntRunsHere(t *testing.T) {
+	for name, edit := range map[string]func(w *world){
+		"runner refuses it": func(w *world) {},
+		"old runner's sandbox refuses it": func(w *world) {
+			cfg := filepath.Join(w.t.TempDir(), "runner.json")
+			os.WriteFile(cfg, []byte(`{"tools": {"nowhere-harness": "/nonexistent/nowhere-harness"}}`), 0o600)
+			w.home.Add(Runner{Name: "fake", Address: localRunner(built.dispatch + " runner serve --config " + cfg + " --max-load 1000 --min-free-mb 1 --dir " + w.remote + " --hive " + built.fakehive), MinFreeMB: 1, MaxLoad: 1000}, testHostKey)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t)
+			edit(w)
+			w.spec.Tools = []string{built.fakehive, "nowhere-harness"}
+			if code := w.delegate(); code != 3 {
+				t.Fatalf("exit %d; err: %s", code, w.read(w.out+".err"))
+			}
+			w.checkTurnRan()
+			ps := w.home.Turns()
+			if len(ps) != 1 || ps[0].Where != "local" || !strings.Contains(ps[0].Why, "nowhere-harness") {
+				t.Fatalf("turns = %+v", ps)
+			}
+			if got := w.home.Lacks("fake"); len(got) != 1 || got[0] != "nowhere-harness" {
+				t.Fatalf("lacks = %v", got)
+			}
+			if b := strings.Join(w.home.Board(0), "\n"); !strings.Contains(b, "needing nowhere-harness run here") {
+				t.Errorf("board doesn't say it:\n%s", b)
+			}
+
+			// The next such turn isn't sent across; one that doesn't need it is.
+			os.WriteFile(w.out, nil, 0o644)
+			if code := w.delegate(); code != 3 {
+				t.Fatalf("second: exit %d", code)
+			}
+			if ps := w.home.Turns(); ps[0].Where != "local" || !strings.Contains(ps[0].Why, "fake: hasn't nowhere-harness") {
+				t.Fatalf("second: turns = %+v", ps)
+			}
+			w.spec.Tools = []string{built.fakehive, "claude"}
+			os.WriteFile(w.out, nil, 0o644)
+			if code := w.delegate(); code != 3 {
+				t.Fatalf("third: exit %d", code)
+			}
+			if ps := w.home.Turns(); ps[0].Where != "fake" {
+				t.Fatalf("third: turns = %+v", ps)
+			}
+		})
 	}
 }
 

@@ -47,6 +47,12 @@ func main() {
 	os.Remove(os.Args[3])
 	var s spec
 	json.Unmarshal(raw, &s)
+	for _, t := range s.Tools { // as sandbox-exec refuses a tool it can't find
+		if _, err := os.Stat(t); filepath.IsAbs(t) && err != nil {
+			fmt.Fprintf(os.Stderr, "sandbox: tool %q not found on this machine\n", filepath.Base(t))
+			os.Exit(125)
+		}
+	}
 	at := map[string]string{}
 	for _, m := range s.Mounts {
 		if !m.Hide {

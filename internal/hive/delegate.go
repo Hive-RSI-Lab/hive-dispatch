@@ -46,7 +46,7 @@ func (h Home) Delegate(specPath, runner string) int {
 		}
 	} else {
 		var why string
-		if r, why, err = h.Pick(); err != nil || r.Name == "" {
+		if r, why, err = h.PickFor(ToolNames(s.Tools)); err != nil || r.Name == "" {
 			if err != nil {
 				why = err.Error()
 			}
@@ -54,6 +54,9 @@ func (h Home) Delegate(specPath, runner string) int {
 		}
 	}
 	res := h.Send(r, s)
+	if len(res.Lacks) > 0 {
+		h.Lack(r.Name, res.Lacks)
+	}
 	if res.Err != nil && !res.Started {
 		return here(s, res.Err.Error())
 	}
