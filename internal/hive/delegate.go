@@ -39,14 +39,16 @@ func (h Home) Delegate(specPath, runner string) int {
 		return here(s, why)
 	}
 	var r Runner
+	turn := s.ID + "/" + filepath.Base(s.Stdout)
 	if runner != "" {
 		r, err = h.Get(runner)
 		if err != nil {
 			return here(s, err.Error())
 		}
+		h.Claim(r, turn)
 	} else {
 		var why string
-		if r, why, err = h.PickFor(ToolNames(s.Tools)); err != nil || r.Name == "" {
+		if r, why, err = h.PickFor(ToolNames(s.Tools), turn); err != nil || r.Name == "" {
 			if err != nil {
 				why = err.Error()
 			}
@@ -54,6 +56,7 @@ func (h Home) Delegate(specPath, runner string) int {
 		}
 	}
 	res := h.Send(r, s)
+	h.Handed(r.Name, turn, false)
 	if len(res.Lacks) > 0 {
 		h.Lack(r.Name, res.Lacks)
 	}

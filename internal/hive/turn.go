@@ -212,6 +212,7 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 		return fail(fmt.Errorf("%s couldn't start it: %s", r.Name, st.Error))
 	}
 	res.Started = true
+	h.Handed(r.Name, s.ID+"/"+filepath.Base(s.Stdout), true)
 	h.Record(res.Placed) // started there: the record says so before it ends
 
 	box := ""

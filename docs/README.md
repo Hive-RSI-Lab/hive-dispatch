@@ -166,7 +166,10 @@ sandbox and can't reach iiks1's local services.
 core is under 0.75 (`--max-load`) and it has 4 GB free (`--min-free-mb`); there
 is no fixed number of turns. The runner checks again as each turn arrives, by
 its own `max_load` and `min_free_mb`, and counts a turn that started in the
-last two minutes as one core and 1 GB until the load average catches up. A
+last two minutes as one core and 1 GB until the load average catches up. The
+Hive counts the same way before it hands a turn over: each turn it has handed
+a runner that the runner's last reading doesn't show yet is one more turn
+running and one more core and 1 GB taken, so a burst stops at its room. A
 person who wants a fixed cap besides sets `max_turns` in runner.json (or
 `runner serve --max N`); the `max` key older setups wrote is ignored. `hive dispatch off iiks1` stops offering it turns without
 removing it; `hive dispatch remove iiks1` forgets it and its host key.
