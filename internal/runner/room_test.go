@@ -69,3 +69,12 @@ func TestCountYoung(t *testing.T) {
 		t.Fatalf("count = %d, %d young; want 2, 1", n, young)
 	}
 }
+
+// The runner reports the room it holds a turn to, so the Hive holds it to the same.
+func TestRoomReportsItsOwnLimits(t *testing.T) {
+	cfg := Config{Name: "x", Dir: t.TempDir(), Hive: "true", MaxLoad: 0.5, MinFreeMB: 2048}
+	st := Room(cfg)
+	if st.MaxLoad != 0.5 || st.MinFreeMB != 2048 || st.Young != 0 {
+		t.Fatalf("Room = %+v", st)
+	}
+}

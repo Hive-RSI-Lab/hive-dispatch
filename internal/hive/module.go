@@ -116,7 +116,7 @@ func (h Home) Board(turns int) []string {
 				turns = fmt.Sprintf("%d/%d turns", s.Running, s.Max)
 			}
 			line += fmt.Sprintf("%s, load %.1f on %d cores, %d of %d MB free, sandbox %s", turns, s.Load1, s.Cores, s.MemFreeMB, s.MemTotalMB, s.Sandbox)
-			if w := r.Room(s); w != "" {
+			if w := r.Room(s, h.Sent(r.Name, s.At)); w != "" {
 				line += "; no room: " + w
 			}
 		}

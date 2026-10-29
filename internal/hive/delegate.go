@@ -38,21 +38,15 @@ func (h Home) Delegate(specPath, runner string) int {
 	if why := Dispatchable(s); why != "" {
 		return here(s, why)
 	}
-	var r Runner
-	if runner != "" {
-		r, err = h.Get(runner)
+	c, why, err := h.Take(ToolNames(s.Tools), runner)
+	if err != nil || c == nil {
 		if err != nil {
-			return here(s, err.Error())
+			why = err.Error()
 		}
-	} else {
-		var why string
-		if r, why, err = h.PickFor(ToolNames(s.Tools)); err != nil || r.Name == "" {
-			if err != nil {
-				why = err.Error()
-			}
-			return here(s, why)
-		}
+		return here(s, why)
 	}
+	defer c.Release()
+	r := c.Runner
 	res := h.Send(r, s)
 	if len(res.Lacks) > 0 {
 		h.Lack(r.Name, res.Lacks)

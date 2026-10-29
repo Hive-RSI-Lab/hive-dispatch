@@ -37,8 +37,15 @@ type Status struct {
 	Load1      float64 `json:"load1"`
 	Running    int     `json:"running"`
 	Max        int     `json:"max"`
-	Sandbox    string  `json:"sandbox"` // what `hive sandbox-probe` said, or why it failed
-	Error      string  `json:"error,omitempty"`
+	// The runner's own room, as it holds a turn to it: load per core under
+	// MaxLoad and MinFreeMB free, counting Young turns (started in the last
+	// two minutes) as a core and a GB each. A runner that predates them
+	// reports none, and the Hive holds it to its own defaults.
+	MaxLoad   float64 `json:"max_load,omitempty"`
+	MinFreeMB int     `json:"min_free_mb,omitempty"`
+	Young     int     `json:"young,omitempty"`
+	Sandbox   string  `json:"sandbox"` // what `hive sandbox-probe` said, or why it failed
+	Error     string  `json:"error,omitempty"`
 }
 
 // Mount kinds.

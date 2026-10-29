@@ -382,7 +382,7 @@ func TestRoom(t *testing.T) {
 	} {
 		s := Seen{Status: ok, At: time.Now()}
 		c.edit(&s)
-		got := Runner{Name: "x"}.Room(s)
+		got := Runner{Name: "x"}.Room(s, 0)
 		if c.want == "" && got != "" || !strings.Contains(got, c.want) {
 			t.Errorf("%s: Room = %q, want %q", c.name, got, c.want)
 		}
@@ -401,6 +401,68 @@ func TestRoom(t *testing.T) {
 	h.See("idle", Seen{Status: idle, At: time.Now()})
 	if r, why, _ := h.Pick(); r.Name != "" || !strings.Contains(why, "full") || !strings.Contains(why, "off: turned off") {
 		t.Fatalf("Pick = %q, why %q", r.Name, why)
+	}
+}
+
+// The Hive's room for a runner is the runner's own: iiks1 refused 187 of 234
+// checks from 03Z on 10-29 as "loaded (4.7-5.4 on 6 cores, N turns running,
+// M just started)", each sent on one status a minute old that had room.
+func TestRoomAgreesWithRunner(t *testing.T) {
+	ok := wire.Status{Cores: 6, MemFreeMB: 25000, Load1: 0.4, Sandbox: "ok bwrap"}
+	for _, c := range []struct {
+		name string
+		edit func(*Seen)
+		sent int
+		want string
+	}{
+		{"young turns it reports count as load", func(s *Seen) { s.Running, s.Young = 5, 5 }, 0, "loaded (5.4"},
+		{"turns sent since count as young", func(s *Seen) {}, 5, "loaded (5.4 on 6 cores, 5 turns running, 5 just started, 5 of them sent"},
+		{"five fit", func(s *Seen) {}, 4, ""},
+		{"its own stricter load", func(s *Seen) { s.MaxLoad = 0.3 }, 2, "loaded"},
+		{"its own memory floor", func(s *Seen) { s.MinFreeMB = 24500 }, 1, "memory"},
+		{"its fixed cap, counting sent", func(s *Seen) { s.Max, s.Running = 3, 1 }, 2, "full (3 of 3 turns"},
+	} {
+		s := Seen{Status: ok, At: time.Now()}
+		c.edit(&s)
+		got := Runner{Name: "x"}.Room(s, c.sent)
+		if c.want == "" && got != "" || !strings.Contains(got, c.want) {
+			t.Errorf("%s: Room = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// A burst of turns on one fresh status takes only the places the runner
+// would give; a place given back is free again.
+func TestTakeCountsTurnsSentSinceStatus(t *testing.T) {
+	h := Home(t.TempDir())
+	h.Save([]Runner{{Name: "iiks1", Address: "ssh://u@x"}})
+	h.See("iiks1", Seen{Status: wire.Status{Cores: 6, MemFreeMB: 25000, Load1: 0.4, Sandbox: "ok bwrap"}, At: time.Now().Add(-time.Second)})
+	var held []*Claim
+	for i := 0; i < 5; i++ {
+		c, why, err := h.Take(nil, "iiks1")
+		if err != nil || c == nil || c.Runner.Name != "iiks1" {
+			t.Fatalf("turn %d: Take = %v, %q, %v", i, c, why, err)
+		}
+		held = append(held, c)
+	}
+	c, why, _ := h.Take(nil, "iiks1")
+	if c != nil || !strings.Contains(why, "loaded (5.4") {
+		t.Fatalf("sixth: Take = %v, why %q", c, why)
+	}
+	if _, why, _ := h.Pick(); !strings.Contains(why, "loaded") {
+		t.Fatalf("room after five sent: %q", why)
+	}
+	if b := strings.Join(h.Board(0), "\n"); !strings.Contains(b, "no room: loaded") {
+		t.Fatalf("board: %s", b)
+	}
+	held[0].Release()
+	if c, why, _ := h.Take(nil, ""); c == nil {
+		t.Fatalf("after one ended: why %q", why)
+	}
+	// A status read after the turns were sent already shows them.
+	h.See("iiks1", Seen{Status: wire.Status{Cores: 6, MemFreeMB: 25000, Load1: 0.4, Running: 5, Young: 5, Sandbox: "ok bwrap"}, At: time.Now().Add(time.Second)})
+	if _, why, _ := h.Pick(); !strings.Contains(why, "loaded (5.4") {
+		t.Fatalf("fresh status: %q", why)
 	}
 }
 

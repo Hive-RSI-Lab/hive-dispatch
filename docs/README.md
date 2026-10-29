@@ -175,7 +175,13 @@ is no fixed number of turns. The runner checks again as each turn arrives, by
 its own `max_load` and `min_free_mb`, and counts a turn that started in the
 last two minutes as one core and 1 GB until the load average catches up. A
 person who wants a fixed cap besides sets `max_turns` in runner.json (or
-`runner serve --max N`); the `max` key older setups wrote is ignored. `hive dispatch off iiks1` stops offering it turns without
+`runner serve --max N`); the `max` key older setups wrote is ignored. The
+Hive holds a turn to the same room before it sends it: the runner's status
+reports its own limits and how many of its turns just started, and each turn
+the Hive hands over holds a claim (under `claims/` in the module's HOME) until
+it ends, so a turn sent since that status counts as running and just started.
+A burst of checks on one status takes only the places the runner would give,
+and the rest are told no here instead of being sent across to be refused. `hive dispatch off iiks1` stops offering it turns without
 removing it; `hive dispatch remove iiks1` forgets it and its host key.
 
 To take the Hive's key off iiks1, delete its line from

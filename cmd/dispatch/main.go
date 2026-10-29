@@ -106,7 +106,7 @@ func run(args []string) int {
 		}
 		s := h.Probe(r)
 		fmt.Printf("added %s\n", r.Name)
-		if w := r.Room(s); w != "" {
+		if w := r.Room(s, 0); w != "" {
 			fmt.Printf("it has no room yet: %s\n", w)
 		} else {
 			fmt.Printf("it has room: %d turns running, load %.1f on %d cores, %d MB free\n", s.Running, s.Load1, s.Cores, s.MemFreeMB)
