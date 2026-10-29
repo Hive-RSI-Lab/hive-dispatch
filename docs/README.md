@@ -57,20 +57,17 @@ It is an optional module, not one of the defaults.
   here. A runner from before that check starts it and its sandbox ends it
   `tool "claude" not found` (exit 125) before anything ran; the module reads
   that as the same refusal. Either way it remembers for an hour what the runner
-  lacks and sends no turn needing it there (the board says so); checks, which
-  need only the hive binary, still go. To give iiks1 turns, install the
-  harness there (and log it in) or name it under `"tools"`.
-- **A check that fails there for a missing tool is can't-run, not red.** A
-  check that ends on a runner having failed for a program it couldn't find
-  (the shell's `sh: 1: hwde: not found` with exit 127, Go's `executable file
-  not found in $PATH`, or a project's own `iverilog is not on PATH`) comes
-  back without the core's exit marker (`hive-check-exit`), so the core reads
-  it as can't-run and puts it back in its line here; its output and a
-  `dispatch:` line in its `.err` say which tool it was. For an hour after,
-  that project's checks don't go to that runner (the board says
-  "checks of pll (hasn't iverilog) run here"); other projects' checks still
-  do. A check the core hands over anyway (its `room` doesn't name the
-  project, see [core-seam.md](core-seam.md)) ends at once without running.
+  lacks and sends no turn needing it there (the board says so). To give
+  iiks1 turns, install the harness there (and log it in) or name it under
+  `"tools"`.
+- **Worker turns only, no checks.** A worker turn needs only its harness on
+  the runner; a project's test check needs that project's whole toolchain
+  there, which is why checks sent to iiks1 kept failing or being refused.
+  So module.json doesn't serve the core's `checks` hook and checks stay in
+  the core's check line here. A check handed over anyway (a spec whose ID
+  starts with `gate-`) is not run, here or there: `turn` writes why to its
+  `.err`, records it as on `nowhere`, and exits 125 with no
+  `hive-check-exit` marker, so the core reads "can't run" and runs it here.
 
 ### What crosses, and what doesn't
 
@@ -86,25 +83,6 @@ It is an optional module, not one of the defaults.
   covers (logins, module homes, private) is never read for sending. A turn
   that needs to read other projects or the journal sees nothing there; that
   is the price of not copying the Hive's records to another machine.
-- **A check's folders don't come back.** For a check the core hands over (a
-  spec whose ID starts with `gate-`), only its output (`stdout`, `.err`,
-  `.egress`) and exit code return. Its checkout and home (`/work`,
-  `/hive/home`, where a test run's build cache lands) are wiped on the
-  runner with the rest of the turn, since the core deletes its own copies as
-  soon as the check ends. Its checkout still goes over whole each time.
-- **Checks: the `checks` hook.** module.json lists `checks` next to
-  `executor`, so the core hands this module a project's test check when its
-  check line here would make it wait and a runner has room. `turn` runs the
-  check's command on the runner and streams its stdout back unchanged; the
-  core wrapped that command so its last line is `hive-check-exit <nonce>
-  <code>`, and takes the verdict from that line, never from `turn`'s exit.
-- **A check never runs here.** A turn that can't go runs here in the Hive's
-  own sandbox, but a check that can't go (no runner has room by then, it was
-  granted a service on this machine, or the runner refused it before
-  starting) is not run at all: run here it would sit outside the core's check
-  line and past its limit. `turn` writes why to the check's `.err`, records
-  it as on `nowhere`, and exits 125 with no marker, so the core reads "can't
-  run" and puts the check back in its line.
 - **The link is authenticated both ways and opens from the Hive only.** The
   Hive dials the runner over SSH with a key of its own (kept in the module's
   HOME, which no agent can read), and only to the host key you pinned.

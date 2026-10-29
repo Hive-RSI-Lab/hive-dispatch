@@ -119,7 +119,7 @@ type Placed struct {
 	At    time.Time `json:"at"`
 	Run   string    `json:"run"`
 	Turn  string    `json:"turn"`
-	Where string    `json:"where"`         // a runner's name, "local", or "nowhere" (a check not run)
+	Where string    `json:"where"`         // a runner's name, "local", or "nowhere" (a check handed over, not run)
 	Why   string    `json:"why,omitempty"` // why it ran locally after all
 	Exit  int       `json:"exit"`
 	Secs  float64   `json:"secs"`
@@ -191,40 +191,6 @@ func (h Home) Lacks(runner string) []string {
 func (h Home) lacks(runner string) map[string]time.Time {
 	m := map[string]time.Time{}
 	if raw, err := os.ReadFile(h.path("lacks", runner+".json")); err == nil {
-		json.Unmarshal(raw, &m)
-	}
-	return m
-}
-
-// LackForChecks records that a check of project failed on runner for a tool
-// it hasn't, so that project's checks stay here for LackFor.
-func (h Home) LackForChecks(runner, project, tool string) error {
-	have := h.checkLacks(runner)
-	have[project] = checkLack{Tool: tool, At: time.Now()}
-	raw, _ := json.Marshal(have)
-	return writeAtomic(h.path("lacks", runner+".checks.json"), raw)
-}
-
-// ChecksLack is the projects whose checks lacked a tool on runner within
-// LackFor, with the tool each lacked.
-func (h Home) ChecksLack(runner string) map[string]string {
-	out := map[string]string{}
-	for p, l := range h.checkLacks(runner) {
-		if time.Since(l.At) < LackFor {
-			out[p] = l.Tool
-		}
-	}
-	return out
-}
-
-type checkLack struct {
-	Tool string    `json:"tool"`
-	At   time.Time `json:"at"`
-}
-
-func (h Home) checkLacks(runner string) map[string]checkLack {
-	m := map[string]checkLack{}
-	if raw, err := os.ReadFile(h.path("lacks", runner+".checks.json")); err == nil {
 		json.Unmarshal(raw, &m)
 	}
 	return m

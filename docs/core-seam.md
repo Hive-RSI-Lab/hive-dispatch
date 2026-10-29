@@ -48,22 +48,11 @@ past a strained machine while an executor has room. A machine over `load_max`
 alone still holds tasks, since launch would run them here.
 
 A project's test check goes to an executor only when its manifest also lists
-the hook `checks` (this one's does; `Runs.CheckExecutor`, ihsan-sa/hive#1885):
-when the check line here would make it wait and the module answers `room`, the
-check's spec (ID `gate-...`) is handed to `turn` and run to its end. The core
-wraps the check's command so its last stdout line is `hive-check-exit <nonce>
-<code>` and takes the verdict from that, never from `turn`'s exit; with no
-marker the check is "can't run" and goes back in the line here. Main's own and
-score checks stay here.
-
-A check that failed on a runner for a tool the runner hasn't comes back
-without its marker too (the module holds the marker back until the check
-ends), and the module remembers the project for that runner. `room` takes
-`--project P` and then names no runner that lacked a tool P's checks need.
-The core asks `room` with no arguments yet, so a check of such a project is
-still handed over; `turn` then ends it at once, unrun, and it goes back in the
-core's line. Passing the project to `room` for a check would keep it in the
-line here from the start.
+the hook `checks` (`Runs.CheckExecutor`, ihsan-sa/hive#1885). This module's
+doesn't: it carries worker turns only, and checks stay in the core's line
+here. A check spec (ID `gate-...`) handed to `turn` anyway ends at once,
+unrun, with no `hive-check-exit` marker, so the core reads "can't run" and
+puts it back in its line.
 
 ## 2. `hive dispatch ...`
 
@@ -93,7 +82,3 @@ module programs come to run in a sandbox where that nested start doesn't
 work, the fallback moves to the core. `room` already answers before the core
 hands a turn over, so the core can keep a "no room" turn and start it locally,
 and `turn` would exit without starting anything.
-
-A check never takes this fallback. Run here it would sit outside the core's
-check line and its limit, so a check that can't go exits 125 without
-running, and the missing marker puts it back in the core's line.

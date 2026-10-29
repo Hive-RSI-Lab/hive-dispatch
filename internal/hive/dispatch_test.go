@@ -462,43 +462,13 @@ func TestLocalRunsOnlyTheHiveBinary(t *testing.T) {
 	}
 }
 
-// A check the core hands over brings back its output and exit code, and
-// nothing of its checkout or home: the core deletes those as it ends.
-func TestCheckBringsBackOnlyOutput(t *testing.T) {
-	w := newWorld(t)
-	w.spec.ID = "gate-test"
-	w.spec.Mounts = []spec.Mount{{Host: w.work, Inside: "/work", RW: true}, {Host: w.rhome, Inside: "/hive/home", RW: true}, {Host: w.tools, Inside: "/hive/tools"}}
-	if code := w.delegate(); code != 1 {
-		t.Fatalf("exit %d, want the check's own 1; err: %s", code, w.read(w.out+".err"))
-	}
-	if out := w.read(w.out); !strings.Contains(out, "got: hello") || !strings.HasSuffix(out, "done\n\nhive-check-exit gate-test 1\n") {
-		t.Errorf("check output = %q, want it to end with the core's exit marker unchanged", out)
-	}
-	if got := w.read(filepath.Join(w.work, "file.txt")); got != "line one\n" {
-		t.Errorf("the checkout came back: file.txt = %q", got)
-	}
-	if _, err := os.Stat(filepath.Join(w.work, "gone.txt")); err != nil {
-		t.Error("a deletion there came back here")
-	}
-	for _, p := range []string{filepath.Join(w.work, "new"), filepath.Join(w.rhome, "session.jsonl")} {
-		if _, err := os.Stat(p); err == nil {
-			t.Errorf("%s came back", p)
-		}
-	}
-	ps := w.home.Turns()
-	if len(ps) != 1 || ps[0].Where != "fake" || ps[0].Exit != 1 || ps[0].Sent == 0 || ps[0].Back != 0 {
-		t.Fatalf("turns = %+v", ps)
-	}
-	if ents, _ := os.ReadDir(filepath.Join(w.remote, "turns")); len(ents) != 0 {
-		t.Errorf("the check's folder stayed on the runner: %v", ents)
-	}
-}
-
-// A check that can't go is never run here: it would run outside the core's
-// check line. It exits without output, so the core finds no exit marker and
-// puts it back in its line.
-func TestCheckNeverRunsHere(t *testing.T) {
+// Dispatch carries worker turns only: a check handed over is run neither on
+// a runner (even one with room) nor here, where it would run outside the
+// core's check line. It exits without output, so the core finds no exit
+// marker and puts it back in its line.
+func TestCheckIsNeverRun(t *testing.T) {
 	for name, edit := range map[string]func(w *world){
+		"runner has room":         func(w *world) {},
 		"granted a local service": func(w *world) { w.spec.Local = []string{"127.0.0.1:11434"} },
 		"runner unreachable": func(w *world) {
 			w.home.Add(Runner{Name: "fake", Address: localRunner("/nonexistent/runner")}, testHostKey)
@@ -566,101 +536,4 @@ func must(b []byte, err error) []byte {
 		panic(err)
 	}
 	return b
-}
-
-// A check that fails on a runner for a tool the runner hasn't is can't-run,
-// not red: it ends without the core's exit marker, so the core puts it back
-// in its line, and its project's checks stay here for a while. Other
-// projects' checks still go.
-func TestCheckLackingAToolStaysHere(t *testing.T) {
-	w := newWorld(t)
-	dir := filepath.Join(t.TempDir(), "checks", "pll")
-	os.MkdirAll(dir, 0o755)
-	w.out = filepath.Join(dir, "gate-abc-test-1.log")
-	w.spec.ID, w.spec.Stdout = "gate-abc-test-1", w.out
-	w.spec.Mounts = []spec.Mount{{Host: w.work, Inside: "/work", RW: true}, {Host: w.rhome, Inside: "/hive/home", RW: true}, {Host: w.tools, Inside: "/hive/tools"}}
-	os.WriteFile(w.spec.Stdin, []byte("lack"), 0o644)
-	if got := CheckProject(w.spec); got != "pll" {
-		t.Fatalf("CheckProject = %q", got)
-	}
-	if code := w.delegate(); code != 125 {
-		t.Fatalf("exit %d, want 125", code)
-	}
-	if out := w.read(w.out); strings.Contains(out, "hive-check-exit") || !strings.Contains(out, "got: lack") {
-		t.Errorf("check output = %q, want it run there without its exit marker", out)
-	}
-	if got := w.read(w.out + ".err"); !strings.Contains(got, "iverilog") || !strings.Contains(got, "not red") {
-		t.Errorf(".err = %q", got)
-	}
-	if got := w.home.ChecksLack("fake"); got["pll"] != "iverilog" {
-		t.Errorf("ChecksLack = %v", got)
-	}
-	if _, why, _ := w.home.PickFor(nil, "pll"); !strings.Contains(why, "pll's checks need") {
-		t.Errorf("a check of pll could go to the runner again: %q", why)
-	}
-	if r, _, _ := w.home.PickFor(nil, "other"); r.Name != "fake" {
-		t.Errorf("another project's check can't go: %q", r.Name)
-	}
-	board := strings.Join(w.home.Board(0), "\n")
-	if !strings.Contains(board, "checks of pll (hasn't iverilog) run here") {
-		t.Errorf("board = %q", board)
-	}
-
-	// The next check of pll, even with the runner the core's room named, is
-	// not run there.
-	os.Remove(w.out)
-	os.Remove(w.out + ".err")
-	f := filepath.Join(t.TempDir(), "spec.json")
-	spec.Write(f, w.spec)
-	if code := w.home.Delegate(f, "fake"); code != 125 {
-		t.Fatalf("exit %d, want 125", code)
-	}
-	if raw, _ := os.ReadFile(w.out); len(raw) > 0 {
-		t.Errorf("the check ran: %q", raw)
-	}
-	if ps := w.home.Turns(); ps[len(ps)-1].Where != "nowhere" {
-		t.Errorf("turns = %+v", ps)
-	}
-}
-
-func TestMissingTool(t *testing.T) {
-	for _, c := range []struct {
-		code int
-		out  string
-		want string
-	}{
-		{127, "bench/tests: OK\n\nsh: 1: hwde: not found\n", "hwde"},
-		{1, "sh: 1: hwde: not found\n", ""},
-		{2, "check: iverilog is not on PATH, no chip-flow eda wrapper was found\n", "iverilog"},
-		{1, `run: exec: "ngspice": executable file not found in $PATH`, "ngspice"},
-		{0, "check: iverilog is not on PATH\n", ""},
-		{1, "--- FAIL: TestX (0.01s)\n", ""},
-	} {
-		if got := MissingTool(c.code, c.out); got != c.want {
-			t.Errorf("MissingTool(%d, %q) = %q, want %q", c.code, c.out, got, c.want)
-		}
-	}
-}
-
-// The marker is held back only while it may be the last line.
-func TestMarkerHold(t *testing.T) {
-	var b strings.Builder
-	m := &markerHold{w: &b}
-	for _, p := range []string{"a\nhive-check", "-exit x 1\n", "b\n", "\nhive-check-exit n 2", "\n"} {
-		m.Write([]byte(p))
-	}
-	if got := b.String(); got != "a\nhive-check-exit x 1\nb\n\n" {
-		t.Errorf("written = %q", got)
-	}
-	m.end(true)
-	if got := b.String(); got != "a\nhive-check-exit x 1\nb\n\n" {
-		t.Errorf("after a dropped end = %q", got)
-	}
-	var k strings.Builder
-	m = &markerHold{w: &k}
-	m.Write([]byte("x\nhive-check-exit n 0\n"))
-	m.end(false)
-	if got := k.String(); got != "x\nhive-check-exit n 0\n" {
-		t.Errorf("kept = %q", got)
-	}
 }
