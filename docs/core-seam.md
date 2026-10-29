@@ -56,6 +56,15 @@ wraps the check's command so its last stdout line is `hive-check-exit <nonce>
 marker the check is "can't run" and goes back in the line here. Main's own and
 score checks stay here.
 
+A check that failed on a runner for a tool the runner hasn't comes back
+without its marker too (the module holds the marker back until the check
+ends), and the module remembers the project for that runner. `room` takes
+`--project P` and then names no runner that lacked a tool P's checks need.
+The core asks `room` with no arguments yet, so a check of such a project is
+still handed over; `turn` then ends it at once, unrun, and it goes back in the
+core's line. Passing the project to `room` for a check would keep it in the
+line here from the start.
+
 ## 2. `hive dispatch ...`
 
 The module's manifest sets `"command": true`. That gives `hive dispatch

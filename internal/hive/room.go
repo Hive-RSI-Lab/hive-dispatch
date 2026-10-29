@@ -86,12 +86,13 @@ func (r Runner) Room(s Seen) string {
 
 // Pick is the runner with the most room, reading any whose last status is
 // stale; why says what each of the others lacked when none has room.
-func (h Home) Pick() (Runner, string, error) { return h.PickFor(nil) }
+func (h Home) Pick() (Runner, string, error) { return h.PickFor(nil, "") }
 
-// PickFor is Pick for a turn that needs the tools named: a runner that
-// lacked one of them within LackFor is passed over without being asked, so
-// its turns aren't sent across only to be refused.
-func (h Home) PickFor(tools []string) (Runner, string, error) {
+// PickFor is Pick for a turn that needs the tools named, or a check of
+// project: a runner that lacked one of the tools, or a tool the project's
+// checks need, within LackFor is passed over without being asked, so its
+// turns aren't sent across only to be refused or to fail there.
+func (h Home) PickFor(tools []string, project string) (Runner, string, error) {
 	rs, err := h.Runners()
 	if err != nil {
 		return Runner{}, "", err
@@ -109,6 +110,10 @@ func (h Home) PickFor(tools []string) (Runner, string, error) {
 	for _, r := range rs {
 		if lack := missing(h.Lacks(r.Name), tools); len(lack) > 0 && !r.Off {
 			why = append(why, r.Name+": hasn't "+strings.Join(lack, ", "))
+			continue
+		}
+		if tool, ok := h.ChecksLack(r.Name)[project]; ok && project != "" && !r.Off {
+			why = append(why, r.Name+": hasn't "+tool+", which "+project+"'s checks need")
 			continue
 		}
 		s, have := h.Seen(r.Name)

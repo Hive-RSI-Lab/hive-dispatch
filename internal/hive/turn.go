@@ -123,6 +123,10 @@ type Result struct {
 	// Lacks are the turn's tools the runner hasn't: it refused the turn for
 	// them, or (a runner from before it checked) its sandbox did.
 	Lacks []string
+	// CheckLacks is the tool a check failed for there: the runner hasn't
+	// it, so the check ended without the core's exit marker (can't run, not
+	// red) and its project's checks stay here.
+	CheckLacks string
 }
 
 // ToolNames are the names a turn's tools go across by: each path's base
@@ -233,6 +237,12 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 		return fail(err)
 	}
 	defer out.Close()
+	var stdout io.Writer = out
+	hold := &markerHold{w: out}
+	if IsCheck(s) {
+		stdout = hold
+		defer hold.end(false)
+	}
 	errf, err := appendFile(s.Stdout + ".err")
 	if err != nil {
 		return fail(err)
@@ -240,6 +250,7 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 	defer errf.Close()
 	var ec *wire.ExitCode
 	var errHead []byte // the start of the turn's stderr there, to read a sandbox's refusal in
+	var errTail []byte // its end, to read a check's missing tool in
 	for {
 		typ, payload, err := l.Recv()
 		if err != nil {
@@ -248,12 +259,13 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 		}
 		switch typ {
 		case wire.Out:
-			out.Write(payload)
+			stdout.Write(payload)
 		case wire.Err:
 			errf.Write(payload)
 			if len(errHead) < 4096 {
 				errHead = append(errHead, payload[:min(len(payload), 4096-len(errHead))]...)
 			}
+			errTail = keepTail(errTail, payload)
 		case wire.Outbox:
 			var m wire.Mail
 			if json.Unmarshal(payload, &m) == nil && box != "" {
@@ -311,6 +323,13 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 				res.Err = fmt.Errorf("%s hasn't the turn's tool %q", r.Name, m[1])
 				res.Placed.Error = res.Err.Error()
 				fmt.Fprintf(errf, "dispatch: %v; nothing ran there, so it runs here\n", res.Err)
+			}
+			if tool := MissingTool(ec.Code, string(hold.tail)+"\n"+string(errTail)); IsCheck(s) && tool != "" {
+				hold.end(true)
+				res.CheckLacks, res.Code = tool, 125
+				res.Placed.Exit = 125
+				res.Placed.Error = fmt.Sprintf("the check failed for %s, which %s hasn't: can't run there, not red; it goes back in the core's line", tool, r.Name)
+				fmt.Fprintf(errf, "dispatch: %s (it exited %d there)\n", res.Placed.Error, ec.Code)
 			}
 			return res
 		default:

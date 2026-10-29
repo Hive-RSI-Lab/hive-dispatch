@@ -4,7 +4,7 @@
 // On the Hive's machine, as the dispatch module (HOME is the module's own):
 //
 //	dispatch                         the module's program: reads each runner's room, reports the board
-//	dispatch room                    prints the runner with the most room, or exits 1 saying why none has
+//	dispatch room [--project P]      prints the runner with the most room, or exits 1 saying why none has
 //	dispatch turn --spec F [--runner N]   runs a turn's sandbox spec on a runner (or here, when it can't go)
 //	dispatch key                     prints the Hive's public key, for a runner's setup
 //	dispatch add NAME ADDRESS [--host-key K] [--max-load L] [--min-free-mb M]
@@ -63,7 +63,12 @@ func run(args []string) int {
 	cmd, rest := args[0], args[1:]
 	switch cmd {
 	case "room":
-		r, why, err := h.Pick()
+		fs := flag.NewFlagSet("room", flag.ContinueOnError)
+		project := fs.String("project", "", "room for a check of this project (one whose checks lacked a tool on a runner doesn't go there)")
+		if fs.Parse(rest) != nil {
+			return 2
+		}
+		r, why, err := h.PickFor(nil, *project)
 		if err != nil {
 			return fail(err)
 		}

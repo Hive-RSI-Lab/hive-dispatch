@@ -60,6 +60,17 @@ It is an optional module, not one of the defaults.
   lacks and sends no turn needing it there (the board says so); checks, which
   need only the hive binary, still go. To give iiks1 turns, install the
   harness there (and log it in) or name it under `"tools"`.
+- **A check that fails there for a missing tool is can't-run, not red.** A
+  check that ends on a runner having failed for a program it couldn't find
+  (the shell's `sh: 1: hwde: not found` with exit 127, Go's `executable file
+  not found in $PATH`, or a project's own `iverilog is not on PATH`) comes
+  back without the core's exit marker (`hive-check-exit`), so the core reads
+  it as can't-run and puts it back in its line here; its output and a
+  `dispatch:` line in its `.err` say which tool it was. For an hour after,
+  that project's checks don't go to that runner (the board says
+  "checks of pll (hasn't iverilog) run here"); other projects' checks still
+  do. A check the core hands over anyway (its `room` doesn't name the
+  project, see [core-seam.md](core-seam.md)) ends at once without running.
 
 ### What crosses, and what doesn't
 
