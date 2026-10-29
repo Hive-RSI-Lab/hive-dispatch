@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Hive-RSI-Lab/hive-dispatch/internal/spec"
@@ -85,6 +87,7 @@ func (h Home) Local(s spec.Spec, why string) int {
 	code := 125
 	hive, err := hiveTool(s)
 	if err == nil {
+		s.Tools = h.findTools(s.Tools, hive)
 		code, err = h.sandboxExec(hive, s)
 	}
 	if err != nil {
@@ -117,6 +120,45 @@ func hiveTool(s spec.Spec) (string, error) {
 		return t, nil
 	}
 	return "", errors.New("no hive binary among the turn's tools")
+}
+
+// findTools gives each tool the core named bare (claude, codex) its
+// absolute path on this machine. sandbox-exec looks for a bare name only on
+// PATH, in $HOME/.local/bin and in /usr/local/bin, and here it runs with the
+// module's HOME, not the person's, so a harness the daemon found in the
+// Hive's bin or the person's ~/.local/bin wasn't found at all ('tool
+// "claude" not found on this machine'). It looks where the daemon would:
+// PATH, the Hive's bin (beside the hive binary, and <hive>/.hive/bin above
+// this module's folder), then the person's usual bin folders. A name found
+// nowhere stays bare, for sandbox-exec to refuse as before.
+func (h Home) findTools(tools []string, hive string) []string {
+	dirs := []string{filepath.Dir(hive), filepath.Join(filepath.Dir(filepath.Dir(string(h))), "bin")}
+	if u, err := user.Current(); err == nil && u.HomeDir != "" {
+		p := u.HomeDir
+		dirs = append(dirs, filepath.Join(p, ".local", "bin"), filepath.Join(p, ".claude", "local"), filepath.Join(p, ".npm-global", "bin"),
+			filepath.Join(p, ".bun", "bin"), filepath.Join(p, "bin"))
+	}
+	dirs = append(dirs, "/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/snap/bin")
+	out := make([]string, len(tools))
+	for i, t := range tools {
+		out[i] = t
+		if filepath.IsAbs(t) || strings.ContainsRune(t, filepath.Separator) {
+			continue
+		}
+		if p, err := exec.LookPath(t); err == nil {
+			if p, err = filepath.Abs(p); err == nil {
+				out[i] = p
+				continue
+			}
+		}
+		for _, d := range dirs {
+			if p, err := exec.LookPath(filepath.Join(d, t)); err == nil {
+				out[i] = p
+				break
+			}
+		}
+	}
+	return out
 }
 
 // sandboxExec runs `hive sandbox-exec` on s. The spec carries the turn's

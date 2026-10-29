@@ -24,6 +24,7 @@ type spec struct {
 	Stdin    string
 	Stdout   string
 	StopFile string `json:"stop_file"`
+	Tools    []string
 	Local    []string
 }
 
@@ -57,6 +58,7 @@ func main() {
 	prompt, _ := os.ReadFile(s.Stdin)
 	fmt.Fprintf(out, "got: %s\n", prompt)
 	out.WriteString(specAt)
+	fmt.Fprintf(out, "tools: %s\n", strings.Join(s.Tools, " "))
 	for _, e := range s.Env {
 		if strings.HasPrefix(e, "HIVE_ID=") {
 			fmt.Fprintln(out, e)

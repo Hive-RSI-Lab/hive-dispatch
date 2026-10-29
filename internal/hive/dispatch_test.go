@@ -284,6 +284,27 @@ func TestFallsBackHere(t *testing.T) {
 	}
 }
 
+// A turn that runs here finds the harness the core names bare, though
+// sandbox-exec runs with the module's HOME and a PATH that lacks it: dispatch
+// gives sandbox-exec its absolute path, from the Hive's bin.
+func TestLocalFindsBareTools(t *testing.T) {
+	w := newWorld(t)
+	root := t.TempDir()
+	w.home = Home(filepath.Join(root, ".hive", "modules", "dispatch")) // no runners: it runs here
+	bin := filepath.Join(root, ".hive", "bin")
+	os.MkdirAll(bin, 0o755)
+	claude := filepath.Join(bin, "claude")
+	os.WriteFile(claude, []byte("#!/bin/sh\n"), 0o755)
+	t.Setenv("PATH", filepath.Join(root, "empty"))
+	w.spec.Tools = []string{built.fakehive, "claude", "nowhere-tool"}
+	if code := w.delegate(); code != 3 {
+		t.Fatalf("exit %d; err: %s", code, w.read(w.out+".err"))
+	}
+	if want := "tools: " + built.fakehive + " " + claude + " nowhere-tool\n"; !strings.Contains(w.read(w.out), want) {
+		t.Errorf("sandbox-exec got:\n%s\nwant a line %q", w.read(w.out), want)
+	}
+}
+
 func TestRoom(t *testing.T) {
 	h := Home(t.TempDir())
 	ok := wire.Status{Cores: 6, MemFreeMB: 25000, Max: 3, Sandbox: "ok bwrap"}
