@@ -167,6 +167,13 @@ removing it; `hive dispatch remove iiks1` forgets it and its host key.
 To take the Hive's key off iiks1, delete its line from
 `~/.ssh/authorized_keys` there.
 
+To update the runner after a change to the module (a fix on the runner's
+side of the link only takes effect once iiks1 runs it), as `hive-runner` there:
+
+```sh
+cd hive-dispatch && git pull && go build -o ~/.local/bin/hive-dispatch ./cmd/dispatch
+```
+
 ## Commands
 
 On the main machine (the module, run as `hive dispatch ...`):

@@ -451,3 +451,38 @@ func TestCheckNeverRunsHere(t *testing.T) {
 		})
 	}
 }
+
+// Once a runner caches a mount as big as the Hive's tools (the whole Go SDK),
+// its manifest of them is over one frame; the next turn still runs there.
+func TestBigCachedMount(t *testing.T) {
+	if testing.Short() {
+		t.Skip("lays out 45000 files")
+	}
+	w := newWorld(t)
+	for d := 0; d < 450; d++ {
+		dir := filepath.Join(w.tools, "go", "src", fmt.Sprintf("a-rather-long-package-path-%03d", d), "internal", "subpackage")
+		os.MkdirAll(dir, 0o755)
+		for f := 0; f < 100; f++ {
+			os.WriteFile(filepath.Join(dir, fmt.Sprintf("source_file_with_a_long_name_%03d.go", f)), nil, 0o644)
+		}
+	}
+	if man, _ := wire.Scan(w.tools, nil); len(must(json.Marshal(man))) <= wire.MaxFrame {
+		t.Fatal("the tools manifest fits one frame; the test needs it over")
+	}
+	for i := 1; i <= 2; i++ {
+		os.WriteFile(w.out, nil, 0o644)
+		if code := w.delegate(); code != 3 {
+			t.Fatalf("turn %d: exit %d: %s %+v", i, code, w.read(w.out+".err"), w.home.Turns())
+		}
+	}
+	if ps := w.home.Turns(); len(ps) == 0 || ps[len(ps)-1].Where != "fake" {
+		t.Fatalf("turns = %+v", ps)
+	}
+}
+
+func must(b []byte, err error) []byte {
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
