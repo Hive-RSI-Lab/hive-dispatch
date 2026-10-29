@@ -50,12 +50,9 @@ func IsCheck(s spec.Spec) bool { return strings.HasPrefix(s.ID, "gate-") }
 // planFor decides how each mount goes across. The turn's own folders go
 // whole; the knowledge base, modules and tools are cached there and sent as
 // changes; other projects and the Hive's records stay here, as empty folders
-// there. Anything a Hide mount covers is never sent. A check's writable
-// folders never come back: the core deletes its checkout and home as soon as
-// it ends, and a test run's build cache in its home is gigabytes.
+// there. Anything a Hide mount covers is never sent.
 func planFor(s spec.Spec) plan {
 	var p plan
-	check := IsCheck(s)
 	kind := func(m spec.Mount) string {
 		switch {
 		case m.Inside == "/hive/projects" || m.Inside == "/hive/state":
@@ -85,7 +82,6 @@ func planFor(s spec.Spec) plan {
 			continue
 		}
 		mp := wire.MountPlan{Inside: m.Inside, RW: m.RW, Kind: kind(m)}
-		mp.Throwaway = check && mp.RW && mp.Kind == wire.KindRun
 		if mp.Kind == wire.KindShared {
 			sum := sha256.Sum256([]byte(m.Host))
 			mp.Key = strings.Trim(strings.ReplaceAll(m.Inside, "/", "_"), "_") + "-" + hex.EncodeToString(sum[:6])
@@ -123,10 +119,6 @@ type Result struct {
 	// Lacks are the turn's tools the runner hasn't: it refused the turn for
 	// them, or (a runner from before it checked) its sandbox did.
 	Lacks []string
-	// CheckLacks is the tool a check failed for there: the runner hasn't
-	// it, so the check ended without the core's exit marker (can't run, not
-	// red) and its project's checks stay here.
-	CheckLacks string
 }
 
 // ToolNames are the names a turn's tools go across by: each path's base
@@ -149,7 +141,7 @@ var notFound = regexp.MustCompile(`tool "([^"]+)" not found on this machine`)
 // Send runs the turn in s on r. The prompt, the turn's folders and its
 // environment (with the turn's short-lived model token, as a local sandbox
 // gets it) go across; the output and the mailbox come back as it runs, and
-// the turn's writable folders (a check's excepted) when it ends.
+// the turn's writable folders when it ends.
 func (h Home) Send(r Runner, s spec.Spec) Result {
 	start := time.Now()
 	res := Result{Placed: Placed{At: start, Run: s.ID, Turn: filepath.Base(s.Stdout), Where: r.Name}}
@@ -237,12 +229,6 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 		return fail(err)
 	}
 	defer out.Close()
-	var stdout io.Writer = out
-	hold := &markerHold{w: out}
-	if IsCheck(s) {
-		stdout = hold
-		defer hold.end(false)
-	}
 	errf, err := appendFile(s.Stdout + ".err")
 	if err != nil {
 		return fail(err)
@@ -250,7 +236,6 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 	defer errf.Close()
 	var ec *wire.ExitCode
 	var errHead []byte // the start of the turn's stderr there, to read a sandbox's refusal in
-	var errTail []byte // its end, to read a check's missing tool in
 	for {
 		typ, payload, err := l.Recv()
 		if err != nil {
@@ -259,13 +244,12 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 		}
 		switch typ {
 		case wire.Out:
-			stdout.Write(payload)
+			out.Write(payload)
 		case wire.Err:
 			errf.Write(payload)
 			if len(errHead) < 4096 {
 				errHead = append(errHead, payload[:min(len(payload), 4096-len(errHead))]...)
 			}
-			errTail = keepTail(errTail, payload)
 		case wire.Outbox:
 			var m wire.Mail
 			if json.Unmarshal(payload, &m) == nil && box != "" {
@@ -294,14 +278,6 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 				return fail(fmt.Errorf("%s sent files for mount %d, which can't take them", r.Name, tr.Mount))
 			}
 			cr := &countReader{r: l.TarReader()}
-			if p.mounts[tr.Mount].Throwaway {
-				// A runner from before Throwaway sends them anyway: read
-				// past them, keeping nothing.
-				if err := wire.Drain(cr); err != nil {
-					return fail(err)
-				}
-				continue
-			}
 			if err := wire.Apply(p.hosts[tr.Mount], tr.Gone, cr); err != nil {
 				return fail(fmt.Errorf("bringing back %s: %w", p.mounts[tr.Mount].Inside, err))
 			}
@@ -323,13 +299,6 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 				res.Err = fmt.Errorf("%s hasn't the turn's tool %q", r.Name, m[1])
 				res.Placed.Error = res.Err.Error()
 				fmt.Fprintf(errf, "dispatch: %v; nothing ran there, so it runs here\n", res.Err)
-			}
-			if tool := MissingTool(ec.Code, string(hold.tail)+"\n"+string(errTail)); IsCheck(s) && tool != "" {
-				hold.end(true)
-				res.CheckLacks, res.Code = tool, 125
-				res.Placed.Exit = 125
-				res.Placed.Error = fmt.Sprintf("the check failed for %s, which %s hasn't: can't run there, not red; it goes back in the core's line", tool, r.Name)
-				fmt.Fprintf(errf, "dispatch: %s (it exited %d there)\n", res.Placed.Error, ec.Code)
 			}
 			return res
 		default:

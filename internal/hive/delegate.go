@@ -20,10 +20,10 @@ import (
 // the turn needs this machine, or the runner refused it before it started).
 // Its exit code is the turn's.
 //
-// A check (IsCheck) never runs here: the core handed it over to keep it out
-// of its own check line, so one that can't go is not run at all (NotRun) and
-// gives back no exit marker, which the core reads as "can't run" and puts
-// back in its line here.
+// Dispatch carries worker turns only. A check (IsCheck) is the core's to
+// run: module.json doesn't serve the `checks` hook, and one handed over
+// anyway is not run at all (NotRun), so the core reads "can't run" and puts
+// it back in its line here.
 func (h Home) Delegate(specPath, runner string) int {
 	s, err := spec.Read(specPath)
 	os.Remove(specPath) // it carries the turn's token
@@ -31,16 +31,12 @@ func (h Home) Delegate(specPath, runner string) int {
 		fmt.Fprintln(os.Stderr, "dispatch:", err)
 		return 125
 	}
-	here := h.Local
 	if IsCheck(s) {
-		here = h.NotRun
+		return h.NotRun(s, "dispatch carries worker turns, not checks")
 	}
+	here := h.Local
 	if why := Dispatchable(s); why != "" {
 		return here(s, why)
-	}
-	project := CheckProject(s)
-	if _, lacks := h.ChecksLack(runner)[project]; runner != "" && project != "" && lacks {
-		runner = "" // the core's room answer didn't know the project: pick again
 	}
 	var r Runner
 	if runner != "" {
@@ -50,7 +46,7 @@ func (h Home) Delegate(specPath, runner string) int {
 		}
 	} else {
 		var why string
-		if r, why, err = h.PickFor(ToolNames(s.Tools), project); err != nil || r.Name == "" {
+		if r, why, err = h.PickFor(ToolNames(s.Tools)); err != nil || r.Name == "" {
 			if err != nil {
 				why = err.Error()
 			}
@@ -64,15 +60,12 @@ func (h Home) Delegate(specPath, runner string) int {
 	if res.Err != nil && !res.Started {
 		return here(s, res.Err.Error())
 	}
-	if res.CheckLacks != "" && project != "" {
-		h.LackForChecks(r.Name, project, res.CheckLacks)
-	}
 	h.Record(res.Placed)
 	return res.Code
 }
 
-// NotRun ends a check that can't go without running it: a check that ran
-// here would run outside the core's check line and past its limit. Nothing
+// NotRun ends a check without running it: run here it would sit outside the
+// core's check line and past its limit. Nothing
 // reaches the check's stdout, so the core finds no exit marker there and
 // puts the check back in its line. The why goes to its .err and the record.
 func (h Home) NotRun(s spec.Spec, why string) int {

@@ -63,12 +63,7 @@ func run(args []string) int {
 	cmd, rest := args[0], args[1:]
 	switch cmd {
 	case "room":
-		fs := flag.NewFlagSet("room", flag.ContinueOnError)
-		project := fs.String("project", "", "room for a check of this project (one whose checks lacked a tool on a runner doesn't go there)")
-		if fs.Parse(rest) != nil {
-			return 2
-		}
-		r, why, err := h.PickFor(nil, *project)
+		r, why, err := h.Pick()
 		if err != nil {
 			return fail(err)
 		}
