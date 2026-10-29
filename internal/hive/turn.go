@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -39,8 +41,30 @@ func Dispatchable(s spec.Spec) string {
 		return "it was granted a service on this machine (" + strings.Join(s.Local, ", ") + ")"
 	case s.Stdout == "":
 		return "it has no output file"
+	case readsRecords(s):
+		return "it reads the Hive's records (/hive/state), which stay on this machine"
 	}
 	return ""
+}
+
+// readsRecords says s mounts the Hive's records and is a run whose work is
+// reading them (a sweep, step-back, judge, filer or lead). The records are
+// far too big and too live to send (10-29: the state folder's cache alone was
+// 6.8 GB, the journal near a GB), so there they are an empty folder. A
+// worker's or reviewer's brief and $HIVE_RUN carry what it needs, and the
+// knowledge base (sent) holds the record's story, so those go.
+func readsRecords(s spec.Spec) bool {
+	for _, m := range s.Mounts {
+		if m.Inside == "/hive/state" && !m.Hide {
+			for _, p := range []string{"w-", "r-", "s-"} {
+				if strings.HasPrefix(s.ID, p) {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // IsCheck says s is a check the core hands over (its ID is "gate-..."), not
@@ -49,15 +73,16 @@ func IsCheck(s spec.Spec) bool { return strings.HasPrefix(s.ID, "gate-") }
 
 // planFor decides how each mount goes across. The turn's own folders go
 // whole; the knowledge base, modules and tools are cached there and sent as
-// changes; other projects and the Hive's records stay here, as empty folders
-// there. Anything a Hide mount covers is never sent.
+// changes; so are the other projects, but only each one's git-tracked files
+// (trackedOnly); the Hive's records stay here, an empty folder there.
+// Anything a Hide mount covers is never sent.
 func planFor(s spec.Spec) plan {
 	var p plan
 	kind := func(m spec.Mount) string {
 		switch {
-		case m.Inside == "/hive/projects" || m.Inside == "/hive/state":
+		case m.Inside == "/hive/state":
 			return wire.KindEmpty
-		case !m.RW && (m.Inside == "/hive/kb" || m.Inside == "/hive/modules" || m.Inside == "/hive/tools" || strings.HasPrefix(m.Inside, "/hive/modules/")):
+		case !m.RW && (m.Inside == "/hive/kb" || m.Inside == "/hive/projects" || m.Inside == "/hive/modules" || m.Inside == "/hive/tools" || strings.HasPrefix(m.Inside, "/hive/modules/")):
 			return wire.KindShared
 		}
 		return wire.KindRun
@@ -94,7 +119,14 @@ func planFor(s spec.Spec) plan {
 			}
 		}
 		box := m.Inside == "/hive/box"
+		var tracked map[string]bool
+		if m.Inside == "/hive/projects" && mp.Kind == wire.KindShared {
+			tracked = trackedOnly(m.Host)
+		}
 		skip := func(rel string) bool {
+			if tracked != nil && !tracked[rel] {
+				return true
+			}
 			for _, c := range covered {
 				if rel == c || strings.HasPrefix(rel, c+"/") {
 					return true
@@ -106,6 +138,32 @@ func planFor(s spec.Spec) plan {
 		p.hosts, p.skips = append(p.hosts, m.Host), append(p.skips, skip)
 	}
 	return p
+}
+
+// trackedOnly is what of the projects folder at root goes across: each
+// project's git-tracked files and the folders holding them, not its .git or
+// build outputs. 10-29: the projects held about 280k files in several GB
+// (pll 1.1 GB, hifi-receiver-2 1 GB), their tracked files about 4.5k in
+// 200 MB. A folder git can't list sends nothing.
+func trackedOnly(root string) map[string]bool {
+	keep := map[string]bool{}
+	entries, _ := os.ReadDir(root)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		out, err := exec.Command("git", "-C", filepath.Join(root, e.Name()), "ls-files", "-z").Output()
+		if err != nil {
+			continue
+		}
+		keep[e.Name()] = true
+		for _, f := range strings.Split(string(out), "\x00") {
+			for rel := path.Join(e.Name(), f); f != "" && !keep[rel]; rel = path.Dir(rel) {
+				keep[rel] = true
+			}
+		}
+	}
+	return keep
 }
 
 // Result is how a dispatched turn ended.

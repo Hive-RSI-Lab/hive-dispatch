@@ -82,11 +82,24 @@ It is an optional module, not one of the defaults.
   folders. The spec file is deleted once read on both sides, and the turn's
   folder on the runner (home, prompt, spec) is wiped when the turn ends, or
   at the next session if the runner was cut off.
-- **Not sent:** other projects (`/hive/projects`) and the Hive's records
-  (`/hive/state`) are empty folders on the runner, and anything a Hide mount
-  covers (logins, module homes, private) is never read for sending. A turn
-  that needs to read other projects or the journal sees nothing there; that
-  is the price of not copying the Hive's records to another machine.
+- **Other projects go as their tracked files.** `/hive/projects` is cached on
+  the runner like the knowledge base, modules and tools, and sent as changes,
+  but only each project's git-tracked files (`git ls-files` per project
+  folder), not its `.git` or what it built. On 10-29 the projects held about
+  280k files in several GB and their tracked files 6.6k entries in 199 MB:
+  the first turn sends that, later ones what changed, and the scan takes
+  under a second. So a hive-fw, hive-mech or hive-hwde turn proving itself on
+  hifi-receiver-2's files finds them there (task 261029-215215: two turns
+  ended blocked on an empty folder). `git -C /hive/projects/x log` doesn't
+  work there; a folder git can't list sends nothing.
+- **The Hive's records stay here.** `/hive/state` is an empty folder on the
+  runner: its cache alone was 6.8 GB and its journal near a GB, live. A run
+  whose work is reading the records (any run but a worker's `w-` or a
+  reviewer's `r-`/`s-` that mounts `/hive/state`: sweeps, step-backs,
+  judges, filers) runs here instead. A worker's brief and `$HIVE_RUN` carry
+  what it needs, and the knowledge base, which is sent, holds the record's
+  story. Anything a Hide mount covers (logins, module homes, private) is
+  never read for sending.
 - **The link is authenticated both ways and opens from the Hive only.** The
   Hive dials the runner over SSH with a key of its own (kept in the module's
   HOME, which no agent can read), and only to the host key you pinned.
