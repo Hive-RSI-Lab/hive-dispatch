@@ -146,3 +146,7 @@ func TakeMail(dir string, send func(Mail) error) error {
 	}
 	return nil
 }
+
+// NoTool starts a runner's refusal of a turn whose tools it can't find; the
+// names follow, comma-separated, then " (" and the rest of the why.
+const NoTool = "no such tool here: "

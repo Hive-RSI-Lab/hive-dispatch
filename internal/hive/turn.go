@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -119,7 +120,27 @@ type Result struct {
 	Started bool
 	Err     error
 	Placed  Placed
+	// Lacks are the turn's tools the runner hasn't: it refused the turn for
+	// them, or (a runner from before it checked) its sandbox did.
+	Lacks []string
 }
+
+// ToolNames are the names a turn's tools go across by: each path's base
+// name, and the hive binary (whatever it is called here) as "hive".
+func ToolNames(tools []string) []string {
+	var out []string
+	for _, tool := range tools {
+		name := filepath.Base(tool)
+		if strings.HasPrefix(name, "hive") {
+			name = "hive"
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
+// notFound is how sandbox-exec refuses a tool it can't find.
+var notFound = regexp.MustCompile(`tool "([^"]+)" not found on this machine`)
 
 // Send runs the turn in s on r. The prompt, the turn's folders and its
 // environment (with the turn's short-lived model token, as a local sandbox
@@ -142,13 +163,7 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 	t := wire.Turn{ID: s.ID, Label: strings.TrimSuffix(filepath.Base(s.Stdout), filepath.Ext(s.Stdout)), Mounts: p.mounts, Stdin: stdin}
 	t.Spec = s
 	t.Spec.Mounts, t.Spec.Tools, t.Spec.Stdin, t.Spec.Stdout, t.Spec.StopFile, t.Spec.Guard, t.Spec.Local = nil, nil, "", "", "", nil, nil
-	for _, tool := range s.Tools {
-		name := filepath.Base(tool)
-		if strings.HasPrefix(name, "hive") {
-			name = "hive"
-		}
-		t.Tools = append(t.Tools, name)
-	}
+	t.Tools = ToolNames(s.Tools)
 
 	l, err := h.Dial(r)
 	if err != nil {
@@ -166,6 +181,10 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 		return fail(l.Why(err))
 	}
 	if man.Error != "" {
+		if names, ok := strings.CutPrefix(man.Error, wire.NoTool); ok {
+			names, _, _ = strings.Cut(names, " (")
+			res.Lacks = strings.Split(names, ", ")
+		}
 		return fail(fmt.Errorf("%s won't take it: %s", r.Name, man.Error))
 	}
 	for i, m := range p.mounts {
@@ -220,6 +239,7 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 	}
 	defer errf.Close()
 	var ec *wire.ExitCode
+	var errHead []byte // the start of the turn's stderr there, to read a sandbox's refusal in
 	for {
 		typ, payload, err := l.Recv()
 		if err != nil {
@@ -231,6 +251,9 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 			out.Write(payload)
 		case wire.Err:
 			errf.Write(payload)
+			if len(errHead) < 4096 {
+				errHead = append(errHead, payload[:min(len(payload), 4096-len(errHead))]...)
+			}
 		case wire.Outbox:
 			var m wire.Mail
 			if json.Unmarshal(payload, &m) == nil && box != "" {
@@ -280,6 +303,15 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 			}
 			res.Code = ec.Code
 			res.Placed.Exit, res.Placed.Ended, res.Placed.Secs = ec.Code, true, time.Since(start).Seconds()
+			// A runner from before it checked tools started a turn whose
+			// harness isn't there: the sandbox refused it before anything ran,
+			// so it is as if the runner had refused it, and it can run here.
+			if m := notFound.FindStringSubmatch(string(errHead) + "\n" + ec.Error); ec.Code == 125 && m != nil {
+				res.Started, res.Lacks = false, []string{m[1]}
+				res.Err = fmt.Errorf("%s hasn't the turn's tool %q", r.Name, m[1])
+				res.Placed.Error = res.Err.Error()
+				fmt.Fprintf(errf, "dispatch: %v; nothing ran there, so it runs here\n", res.Err)
+			}
 			return res
 		default:
 			return fail(fmt.Errorf("unexpected frame %q", typ))

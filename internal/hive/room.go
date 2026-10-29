@@ -3,6 +3,7 @@ package hive
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -85,7 +86,12 @@ func (r Runner) Room(s Seen) string {
 
 // Pick is the runner with the most room, reading any whose last status is
 // stale; why says what each of the others lacked when none has room.
-func (h Home) Pick() (Runner, string, error) {
+func (h Home) Pick() (Runner, string, error) { return h.PickFor(nil) }
+
+// PickFor is Pick for a turn that needs the tools named: a runner that
+// lacked one of them within LackFor is passed over without being asked, so
+// its turns aren't sent across only to be refused.
+func (h Home) PickFor(tools []string) (Runner, string, error) {
 	rs, err := h.Runners()
 	if err != nil {
 		return Runner{}, "", err
@@ -101,6 +107,10 @@ func (h Home) Pick() (Runner, string, error) {
 	var ok []cand
 	var why []string
 	for _, r := range rs {
+		if lack := missing(h.Lacks(r.Name), tools); len(lack) > 0 && !r.Off {
+			why = append(why, r.Name+": hasn't "+strings.Join(lack, ", "))
+			continue
+		}
 		s, have := h.Seen(r.Name)
 		if !have || time.Since(s.At) > Fresh {
 			if r.Off {
@@ -125,4 +135,15 @@ func (h Home) Pick() (Runner, string, error) {
 		return ok[i].free > ok[j].free
 	})
 	return ok[0].r, "", nil
+}
+
+// missing are the tools in want that are in lacks.
+func missing(lacks, want []string) []string {
+	var out []string
+	for _, t := range want {
+		if slices.Contains(lacks, t) && !slices.Contains(out, t) {
+			out = append(out, t)
+		}
+	}
+	return out
 }

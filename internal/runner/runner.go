@@ -236,6 +236,10 @@ func turn(cfg Config, c *wire.Conn) error {
 	if sb := probe(cfg); !strings.HasPrefix(sb, "ok") {
 		return refuse("no sandbox here: " + sb)
 	}
+	tools, missing := findTools(cfg, t.Tools)
+	if len(missing) > 0 {
+		return refuse(wire.NoTool + strings.Join(missing, ", ") + " (put it on PATH or name its path under \"tools\" in runner.json)")
+	}
 	dir, lock, err := claim(cfg, unsafeName.ReplaceAllString(t.ID+"-"+t.Label, "_"))
 	if err != nil {
 		return refuse(err.Error())
@@ -307,16 +311,7 @@ func turn(cfg Config, c *wire.Conn) error {
 	for i, m := range t.Mounts {
 		s.Mounts[i] = spec.Mount{Host: hosts[i], Inside: m.Inside, RW: m.RW && !m.Hide && m.Kind == wire.KindRun, Hide: m.Hide}
 	}
-	s.Tools = nil
-	for _, name := range t.Tools {
-		if name == "hive" {
-			s.Tools = append(s.Tools, cfg.Hive)
-		} else if p, ok := cfg.Tools[name]; ok {
-			s.Tools = append(s.Tools, p)
-		} else {
-			s.Tools = append(s.Tools, name) // sandbox-exec finds it on PATH
-		}
-	}
+	s.Tools = tools
 	s.Stdin = filepath.Join(dir, "stdin")
 	s.Stdout = filepath.Join(dir, "out")
 	s.StopFile = filepath.Join(dir, "stop")
@@ -433,6 +428,40 @@ loop:
 		}
 	}
 	return c.Send(wire.Done, nil)
+}
+
+// findTools gives each tool the turn names its path here: the hive binary,
+// the path runner.json names, or where sandbox-exec would find it (PATH,
+// ~/.local/bin, /usr/local/bin). missing are the names found nowhere: a turn
+// whose harness isn't here is refused before it takes a place, so it runs on
+// the Hive's machine instead of ending 'tool "claude" not found' (exit 125).
+func findTools(cfg Config, names []string) (tools, missing []string) {
+	home, _ := os.UserHomeDir()
+	for _, name := range names {
+		switch p, ok := cfg.Tools[name]; {
+		case name == "hive":
+			tools = append(tools, cfg.Hive)
+			continue
+		case ok:
+			tools = append(tools, p)
+			continue
+		}
+		found := ""
+		if p, err := exec.LookPath(name); err == nil {
+			found, _ = filepath.Abs(p)
+		}
+		for _, d := range []string{filepath.Join(home, ".local", "bin"), "/usr/local/bin"} {
+			if p, err := exec.LookPath(filepath.Join(d, name)); found == "" && filepath.IsAbs(d) && err == nil {
+				found = p
+			}
+		}
+		if found == "" {
+			missing = append(missing, name)
+			continue
+		}
+		tools = append(tools, found)
+	}
+	return tools, missing
 }
 
 // back says the mount's files go back to the Hive when the turn ends.

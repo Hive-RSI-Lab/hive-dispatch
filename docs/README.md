@@ -50,6 +50,16 @@ It is an optional module, not one of the defaults.
   and removed when the turn ends. module.json declares this. That binary is
   trusted because the core wrote the spec naming it (its own hive binary);
   nothing the module or a runner sends chooses it.
+- **A turn goes only where its harness is.** The runner looks for each of a
+  turn's tools (the hive binary, the path `"tools"` in runner.json names, then
+  PATH, `~/.local/bin` and `/usr/local/bin`) before it takes the turn, and
+  refuses one whose harness (`claude`, `codex`) isn't there, so the turn runs
+  here. A runner from before that check starts it and its sandbox ends it
+  `tool "claude" not found` (exit 125) before anything ran; the module reads
+  that as the same refusal. Either way it remembers for an hour what the runner
+  lacks and sends no turn needing it there (the board says so); checks, which
+  need only the hive binary, still go. To give iiks1 turns, install the
+  harness there (and log it in) or name it under `"tools"`.
 
 ### What crosses, and what doesn't
 
