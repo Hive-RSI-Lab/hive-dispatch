@@ -111,7 +111,11 @@ func (h Home) Board(turns int) []string {
 		case s.Reach != "":
 			line += "unreachable: " + s.Reach
 		default:
-			line += fmt.Sprintf("%d/%d turns, load %.1f on %d cores, %d of %d MB free, sandbox %s", s.Running, s.Max, s.Load1, s.Cores, s.MemFreeMB, s.MemTotalMB, s.Sandbox)
+			turns := fmt.Sprintf("%d turns", s.Running)
+			if s.Max > 0 {
+				turns = fmt.Sprintf("%d/%d turns", s.Running, s.Max)
+			}
+			line += fmt.Sprintf("%s, load %.1f on %d cores, %d of %d MB free, sandbox %s", turns, s.Load1, s.Cores, s.MemFreeMB, s.MemTotalMB, s.Sandbox)
 			if w := r.Room(s); w != "" {
 				line += "; no room: " + w
 			}

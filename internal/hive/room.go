@@ -73,7 +73,7 @@ func (r Runner) Room(s Seen) string {
 		return s.Error
 	case !strings.HasPrefix(s.Sandbox, "ok"):
 		return "no sandbox there: " + s.Sandbox
-	case s.Running >= s.Max:
+	case s.Max > 0 && s.Running >= s.Max:
 		return fmt.Sprintf("full (%d of %d turns)", s.Running, s.Max)
 	case s.Cores > 0 && s.Load1/float64(s.Cores) > maxLoad:
 		return fmt.Sprintf("loaded (%.1f on %d cores)", s.Load1, s.Cores)
@@ -95,8 +95,8 @@ func (h Home) Pick() (Runner, string, error) {
 	}
 	type cand struct {
 		r    Runner
-		free int
 		load float64
+		free int
 	}
 	var ok []cand
 	var why []string
@@ -113,16 +113,16 @@ func (h Home) Pick() (Runner, string, error) {
 			why = append(why, r.Name+": "+w)
 			continue
 		}
-		ok = append(ok, cand{r, s.Max - s.Running, s.Load1 / float64(max(1, s.Cores))})
+		ok = append(ok, cand{r, s.Load1 / float64(max(1, s.Cores)), s.MemFreeMB})
 	}
 	if len(ok) == 0 {
 		return Runner{}, strings.Join(why, "; "), nil
 	}
 	sort.SliceStable(ok, func(i, j int) bool {
-		if ok[i].free != ok[j].free {
-			return ok[i].free > ok[j].free
+		if ok[i].load != ok[j].load {
+			return ok[i].load < ok[j].load
 		}
-		return ok[i].load < ok[j].load
+		return ok[i].free > ok[j].free
 	})
 	return ok[0].r, "", nil
 }
