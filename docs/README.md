@@ -59,7 +59,11 @@ It is an optional module, not one of the defaults.
   that as the same refusal. Either way it remembers for an hour what the runner
   lacks and sends no turn needing it there (the board says so). To give
   iiks1 turns, install the harness there (and log it in) or name it under
-  `"tools"`.
+  `"tools"`. With claude installed for `hive-runner`, real worker turns run
+  there (the first: task 261028-141143, 2026-10-29, which ran `go test ./...`
+  and the score on iiks1). Its `hive agent` ops go through the relayed mailbox
+  and wait on the core here like a local turn's: when this machine is loaded
+  an op can time out on the runner and its reply still arrive minutes later.
 - **Worker turns only, no checks.** A worker turn needs only its harness on
   the runner; a project's test check needs that project's whole toolchain
   there, which is why checks sent to iiks1 kept failing or being refused.
