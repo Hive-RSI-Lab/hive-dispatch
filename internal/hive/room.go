@@ -76,22 +76,64 @@ func (r Runner) Room(s Seen) string {
 		return "no sandbox there: " + s.Sandbox
 	case s.Max > 0 && s.Running >= s.Max:
 		return fmt.Sprintf("full (%d of %d turns)", s.Running, s.Max)
-	case s.Cores > 0 && s.Load1/float64(s.Cores) > maxLoad:
-		return fmt.Sprintf("loaded (%.1f on %d cores)", s.Load1, s.Cores)
-	case s.MemFreeMB < minFree:
-		return fmt.Sprintf("low on memory (%d MB free)", s.MemFreeMB)
+	case s.Cores > 0 && load(s)/float64(s.Cores) > maxLoad:
+		return fmt.Sprintf("loaded (%.1f on %d cores, %d turns just started)", load(s), s.Cores, s.Young)
+	case free(s) < minFree:
+		return fmt.Sprintf("low on memory (%d MB free, %d turns just started)", free(s), s.Young)
 	}
 	return ""
 }
 
-// Pick is the runner with the most room, reading any whose last status is
-// stale; why says what each of the others lacked when none has room.
-func (h Home) Pick() (Runner, string, error) { return h.PickFor(nil) }
+// load and free are a reading's load and memory free, counting each turn
+// that started too lately to show in them as YoungLoad and YoungMB.
+func load(s Seen) float64 { return s.Load1 + float64(s.Young)*YoungLoad }
+func free(s Seen) int     { return s.MemFreeMB - s.Young*YoungMB }
 
-// PickFor is Pick for a turn that needs the tools named: a runner that
+// Pick is the runner with the most room, reading any whose last status is
+// stale; why says what each of the others lacked when none has room. It
+// is `room`'s answer, which the core hands a turn over on: the runner it
+// names counts that turn as handed until the turn comes (AskFor).
+func (h Home) Pick() (Runner, string, error) { return h.PickFor(nil, "") }
+
+// PickFor is Pick for turn, which needs the tools named: a runner that
 // lacked one of them within LackFor is passed over without being asked, so
-// its turns aren't sent across only to be refused there.
-func (h Home) PickFor(tools []string) (Runner, string, error) {
+// its turns aren't sent across only to be refused there. Each runner's room
+// counts the turns handed to it that its reading doesn't show yet, and the
+// runner picked counts this one (Handed ends that).
+func (h Home) PickFor(tools []string, turn string) (Runner, string, error) {
+	h.refresh(tools)
+	done, hs := h.lockHands()
+	defer done()
+	r, why, err := h.pick(tools, turn, hs)
+	if r.Name != "" {
+		hs.hand(r.Name, turn)
+	}
+	return r, why, err
+}
+
+// refresh reads the runners whose last status is stale, outside the
+// handovers' lock: a read takes up to 30s, and a `room` asked meanwhile
+// would wait past the core's 5s for it.
+func (h Home) refresh(tools []string) {
+	rs, _ := h.Runners()
+	for _, r := range rs {
+		if r.Off || len(missing(h.Lacks(r.Name), tools)) > 0 {
+			continue
+		}
+		if s, have := h.Seen(r.Name); !have || time.Since(s.At) > Fresh {
+			h.Probe(r)
+		}
+	}
+}
+
+// Claim counts turn as handed to r, a runner named rather than picked.
+func (h Home) Claim(r Runner, turn string) {
+	done, hs := h.lockHands()
+	defer done()
+	hs.hand(r.Name, turn)
+}
+
+func (h Home) pick(tools []string, turn string, hs hands) (Runner, string, error) {
 	rs, err := h.Runners()
 	if err != nil {
 		return Runner{}, "", err
@@ -119,11 +161,16 @@ func (h Home) PickFor(tools []string) (Runner, string, error) {
 			}
 			s = h.Probe(r)
 		}
+		n := hs.pending(r.Name, s)
+		if turn != "" && hs.asked(r.Name) {
+			n-- // the `room` answer this turn came on
+		}
+		s = with(s, n)
 		if w := r.Room(s); w != "" {
 			why = append(why, r.Name+": "+w)
 			continue
 		}
-		ok = append(ok, cand{r, s.Load1 / float64(max(1, s.Cores)), s.MemFreeMB})
+		ok = append(ok, cand{r, load(s) / float64(max(1, s.Cores)), free(s)})
 	}
 	if len(ok) == 0 {
 		return Runner{}, strings.Join(why, "; "), nil

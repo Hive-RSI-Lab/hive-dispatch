@@ -36,6 +36,7 @@ type Status struct {
 	MemFreeMB  int     `json:"mem_free_mb"`
 	Load1      float64 `json:"load1"`
 	Running    int     `json:"running"`
+	Young      int     `json:"young,omitempty"` // of those, how many started too lately to show in the load and memory yet
 	Max        int     `json:"max"`
 	Sandbox    string  `json:"sandbox"` // what `hive sandbox-probe` said, or why it failed
 	Error      string  `json:"error,omitempty"`

@@ -104,7 +104,7 @@ func Room(cfg Config) wire.Status {
 	st := wire.Status{Name: cfg.Name, Version: wire.Version, Cores: runtime.NumCPU(), Max: cfg.Max}
 	st.MemTotalMB = int(memField("MemTotal:") / 1024)
 	st.MemFreeMB, st.Load1 = readRoom()
-	st.Running = running(cfg)
+	st.Running, st.Young = running(cfg)
 	st.Sandbox = probe(cfg)
 	return st
 }
@@ -169,16 +169,16 @@ func probe(cfg Config) string {
 }
 
 // running counts turns whose session still holds its lock, and wipes the
-// folders of any that ended without cleaning up (a dropped link, a reboot).
-func running(cfg Config) int {
+// folders of any that ended without cleaning up (a dropped link, a reboot),
+// and how many of them started within Young.
+func running(cfg Config) (n, young int) {
 	os.MkdirAll(filepath.Join(cfg.Dir, "turns"), 0o700)
 	all, err := waitLock(filepath.Join(cfg.Dir, "turns.lock"))
 	if err != nil {
-		return 0
+		return 0, 0
 	}
 	defer all.Close()
-	n, _ := count(cfg)
-	return n
+	return count(cfg)
 }
 
 // claim takes a folder and a place for one more turn, if there is room.

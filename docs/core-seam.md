@@ -20,7 +20,12 @@ environment `runner.Env` gives (no forge or model credentials, no `HIVE_*`):
   turn now. Anything else means no. The core waits at most 5 seconds
   (`RoomWait`). A "no" stands for 15 seconds and a "yes" for 5, so the work
   queue's question and the launch after it ask only once. A turn handed over
-  spends the "yes".
+  spends the "yes". Each "yes" counts as a turn handed to that runner (for
+  30 seconds, or until its turn comes and takes its place), and each turn
+  counts until a reading of the runner after it started shows it, so a burst
+  of asks judged on one cached reading stops at the runner's room instead of
+  all hearing "yes" (10-29: 61 turns in seven minutes, all refused there and
+  run here on a machine at 92% memory pressure).
 - `<exec> turn --spec <file> --runner <name>`: runs the turn in the spec and
   exits with its exit code. It writes the turn's output to the spec's `stdout`
   (and `.err`, `.egress`) and stops when the spec's `stop_file` appears, as

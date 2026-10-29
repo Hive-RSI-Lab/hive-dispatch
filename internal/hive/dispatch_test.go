@@ -376,6 +376,8 @@ func TestRoom(t *testing.T) {
 		{"full at a fixed cap", func(s *Seen) { s.Running = 3 }, "full"},
 		{"no fixed cap", func(s *Seen) { s.Max, s.Running = 0, 12 }, ""},
 		{"loaded", func(s *Seen) { s.Load1 = 5 }, "loaded"},
+		{"loaded by turns just started", func(s *Seen) { s.Load1, s.Young = 1, 4 }, "loaded"},
+		{"memory taken by turns just started", func(s *Seen) { s.Max, s.Cores, s.MemFreeMB, s.Young = 0, 64, 9000, 5 }, "memory"},
 		{"low memory", func(s *Seen) { s.MemFreeMB = 1000 }, "memory"},
 		{"no sandbox", func(s *Seen) { s.Sandbox = "unavailable: no bwrap" }, "sandbox"},
 		{"unreachable", func(s *Seen) { s.Reach = "connection refused" }, "unreachable"},
@@ -536,4 +538,63 @@ func must(b []byte, err error) []byte {
 		panic(err)
 	}
 	return b
+}
+
+// A burst of `room` asks and turns judged on one reading stops at the
+// runner's room: each turn handed over counts until a reading shows it.
+func TestBurstStopsAtRoom(t *testing.T) {
+	h := Home(t.TempDir())
+	h.Save([]Runner{{Name: "iiks1", Address: "ssh://u@x"}})
+	read := time.Now()
+	h.See("iiks1", Seen{Status: wire.Status{Cores: 6, MemFreeMB: 25000, Load1: 0.5, Sandbox: "ok bwrap"}, At: read})
+	n := 0
+	for i := 0; i < 20; i++ {
+		if r, _, _ := h.Pick(); r.Name == "iiks1" {
+			n++
+		}
+	}
+	// As the runner judges it: room while 0.5 and those just started come
+	// to no more than 4.5 on 6 cores (0.75 a core): five yeses, no sixth.
+	if n != 5 {
+		t.Fatalf("room said yes %d times on one reading, want 5", n)
+	}
+	r, why, _ := h.Pick()
+	if r.Name != "" || !strings.Contains(why, "loaded") {
+		t.Fatalf("sixth Pick = %q (%s)", r.Name, why)
+	}
+	// The turns come on those answers: each takes one, so all five go.
+	for i := 0; i < 5; i++ {
+		if r, why, _ := h.PickFor(nil, fmt.Sprintf("run/turn-%d", i)); r.Name != "iiks1" {
+			t.Fatalf("turn %d on its answer: Pick = %q (%s)", i, r.Name, why)
+		}
+	}
+	// One more turn without an answer has no room.
+	if r, _, _ := h.PickFor(nil, "run/extra"); r.Name != "" {
+		t.Fatalf("a sixth turn went to %s", r.Name)
+	}
+	// A turn that never started there frees its place.
+	h.Handed("iiks1", "run/turn-0", false)
+	if r, _, _ := h.PickFor(nil, "run/turn-5"); r.Name != "iiks1" {
+		t.Fatal("a refused turn's place stayed taken")
+	}
+	// Started turns count until a reading after their start shows them.
+	for i := 1; i <= 5; i++ {
+		h.Handed("iiks1", fmt.Sprintf("run/turn-%d", i), true)
+	}
+	if r, _, _ := h.Pick(); r.Name != "" {
+		t.Fatal("started turns stopped counting before a reading showed them")
+	}
+	h.See("iiks1", Seen{Status: wire.Status{Cores: 6, MemFreeMB: 25000, Load1: 2.5, Running: 5, Young: 1, Sandbox: "ok bwrap"}, At: time.Now().Add(time.Second)})
+	if r, why, _ := h.Pick(); r.Name != "iiks1" {
+		t.Fatalf("a reading showing the turns: Pick = %q (%s)", r.Name, why)
+	}
+	// A fixed cap counts handovers too.
+	h2 := Home(t.TempDir())
+	h2.Save([]Runner{{Name: "x", Address: "ssh://u@x"}})
+	h2.See("x", Seen{Status: wire.Status{Cores: 64, MemFreeMB: 250000, Max: 2, Sandbox: "ok bwrap"}, At: time.Now()})
+	h2.Pick()
+	h2.Pick()
+	if r, why, _ := h2.Pick(); r.Name != "" || !strings.Contains(why, "full") {
+		t.Fatalf("third Pick at a cap of 2 = %q (%s)", r.Name, why)
+	}
 }
