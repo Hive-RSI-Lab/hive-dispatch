@@ -38,6 +38,10 @@ func (h Home) Delegate(specPath, runner string) int {
 	if why := Dispatchable(s); why != "" {
 		return here(s, why)
 	}
+	project := CheckProject(s)
+	if _, lacks := h.ChecksLack(runner)[project]; runner != "" && project != "" && lacks {
+		runner = "" // the core's room answer didn't know the project: pick again
+	}
 	var r Runner
 	if runner != "" {
 		r, err = h.Get(runner)
@@ -46,7 +50,7 @@ func (h Home) Delegate(specPath, runner string) int {
 		}
 	} else {
 		var why string
-		if r, why, err = h.PickFor(ToolNames(s.Tools)); err != nil || r.Name == "" {
+		if r, why, err = h.PickFor(ToolNames(s.Tools), project); err != nil || r.Name == "" {
 			if err != nil {
 				why = err.Error()
 			}
@@ -59,6 +63,9 @@ func (h Home) Delegate(specPath, runner string) int {
 	}
 	if res.Err != nil && !res.Started {
 		return here(s, res.Err.Error())
+	}
+	if res.CheckLacks != "" && project != "" {
+		h.LackForChecks(r.Name, project, res.CheckLacks)
 	}
 	h.Record(res.Placed)
 	return res.Code

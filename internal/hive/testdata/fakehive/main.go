@@ -91,6 +91,11 @@ func main() {
 	state, _ := os.ReadDir(at["/hive/state"])
 	os.WriteFile(filepath.Join(work, "state-entries.txt"), []byte(fmt.Sprint(len(state))), 0o644)
 	os.WriteFile(filepath.Join(at["/hive/home"], "session.jsonl"), []byte("session\n"), 0o644)
+	if box == "" && strings.Contains(string(prompt), "lack") { // a check that needs a tool this machine hasn't
+		fmt.Fprintln(errf, "check: iverilog is not on PATH; see tests/check.sh")
+		fmt.Fprintf(out, "\nhive-check-exit %s 2\n", s.ID)
+		os.Exit(2)
+	}
 	if box == "" { // a check: no box, no mailbox; it ends with the core's exit marker
 		fmt.Fprintln(out, "done")
 		fmt.Fprintf(out, "\nhive-check-exit %s 1\n", s.ID)

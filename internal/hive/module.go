@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -125,6 +126,14 @@ func (h Home) Board(turns int) []string {
 		}
 		if lack := h.Lacks(r.Name); len(lack) > 0 {
 			line += "; turns needing " + strings.Join(lack, ", ") + " run here: it hasn't them"
+		}
+		if lack := h.ChecksLack(r.Name); len(lack) > 0 {
+			var ps []string
+			for p, tool := range lack {
+				ps = append(ps, p+" (hasn't "+tool+")")
+			}
+			sort.Strings(ps)
+			line += "; checks of " + strings.Join(ps, ", ") + " run here"
 		}
 		out = append(out, line)
 	}
