@@ -50,6 +50,13 @@ It is an optional module, not one of the defaults.
   and removed when the turn ends. module.json declares this. That binary is
   trusted because the core wrote the spec naming it (its own hive binary);
   nothing the module or a runner sends chooses it.
+- **Or gives it back, when the core takes it.** A core that sets
+  `EXECUTOR_GIVE_BACK=1` for `turn` (ihsan-sa/hive#2066) takes back a turn
+  handed over that hasn't started. Then a turn that can't go isn't run here
+  by the module: it ends at once with exit 125 and a `dispatch: not run:
+  <why>` line in its `.err`, recorded as `nowhere`, and the core runs it here
+  itself under its pace and strain hold, which a turn the module runs here
+  would skip.
 - **A turn goes only where its harness is.** The runner looks for each of a
   turn's tools (the hive binary, the path `"tools"` in runner.json names, then
   PATH, `~/.local/bin` and `/usr/local/bin`) before it takes the turn, and

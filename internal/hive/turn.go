@@ -299,7 +299,7 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 				res.Started, res.Lacks = false, []string{m[1]}
 				res.Err = fmt.Errorf("%s hasn't the turn's tool %q", r.Name, m[1])
 				res.Placed.Error = res.Err.Error()
-				fmt.Fprintf(errf, "dispatch: %v; nothing ran there, so it runs here\n", res.Err)
+				fmt.Fprintf(errf, "dispatch: %v; nothing ran there\n", res.Err)
 			}
 			return res
 		default:

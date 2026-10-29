@@ -290,6 +290,49 @@ func TestFallsBackHere(t *testing.T) {
 	}
 }
 
+// When the core takes turns back (EXECUTOR_GIVE_BACK=1), a turn that can't
+// go is given back unstarted instead of run here past the core's holds: exit
+// 125 and the "dispatch: not run:" line the core reads. One that can go still
+// runs on the runner.
+func TestGivesBackWhenCoreTakesIt(t *testing.T) {
+	t.Setenv(GiveBackEnv, "1")
+	for name, edit := range map[string]func(w *world){
+		"granted a local service": func(w *world) { w.spec.Local = []string{"127.0.0.1:11434"} },
+		"runner unreachable": func(w *world) {
+			w.home.Add(Runner{Name: "fake", Address: localRunner("/nonexistent/runner")}, testHostKey)
+		},
+		"runner has no sandbox": func(w *world) {
+			w.home.Add(Runner{Name: "fake", Address: localRunner(built.dispatch + " runner serve --config /nonexistent --max 1 --max-load 1000 --min-free-mb 1 --dir " + w.remote + " --hive /nonexistent/hive"), MinFreeMB: 1, MaxLoad: 1000}, testHostKey)
+		},
+		"no runner": func(w *world) { w.home.Remove("fake") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t)
+			edit(w)
+			if code := w.delegate(); code != 125 {
+				t.Fatalf("exit %d, want 125; err: %s", code, w.read(w.out+".err"))
+			}
+			if raw, _ := os.ReadFile(w.out); strings.Contains(string(raw), "got:") {
+				t.Errorf("the turn ran: %q", raw)
+			}
+			if got := w.read(w.out + ".err"); !strings.Contains(got, "dispatch: not run: ") {
+				t.Errorf(".err = %q", got)
+			}
+			ps := w.home.Turns()
+			if len(ps) != 1 || ps[0].Where != "nowhere" || ps[0].Exit != 125 || !ps[0].Ended || ps[0].Error == "" {
+				t.Fatalf("turns = %+v", ps)
+			}
+		})
+	}
+	t.Run("runner has room", func(t *testing.T) {
+		w := newWorld(t)
+		if code := w.delegate(); code != 3 {
+			t.Fatalf("exit %d, want the turn's own 3; err: %s", code, w.read(w.out+".err"))
+		}
+		w.checkTurnRan()
+	})
+}
+
 // A turn that runs here finds the harness the core names bare, though
 // sandbox-exec runs with the module's HOME and a PATH that lacks it: dispatch
 // gives sandbox-exec its absolute path, from the Hive's bin.
