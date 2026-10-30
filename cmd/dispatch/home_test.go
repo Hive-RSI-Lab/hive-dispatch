@@ -32,7 +32,7 @@ func TestHomeFromTheCoresScrubbedEnv(t *testing.T) {
 // The Hive's score check runs with an empty HOME of its own and HIVE_HOME at
 // a read-only copy of the module's records (the core's moduleRecords), the
 // copy cut to its last bytes, so its first line may be half a line.
-func TestScoreReadsTheScoreChecksRecords(t *testing.T) {
+func TestRanReadsTheScoreChecksRecords(t *testing.T) {
 	root := t.TempDir()
 	mod := filepath.Join(root, ".hive", "modules", "dispatch")
 	os.MkdirAll(mod, 0o755)
@@ -51,7 +51,7 @@ func TestScoreReadsTheScoreChecksRecords(t *testing.T) {
 	if err != nil || string(h) != mod {
 		t.Fatalf("home = %q, %v; want %q", h, err, mod)
 	}
-	if n := h.Score(time.Now()); n != 1 {
-		t.Fatalf("score %d, want 1 (only w-1)", n)
+	if n := h.Ran(time.Now()); n != 1 {
+		t.Fatalf("ran %d, want 1 (only w-1)", n)
 	}
 }

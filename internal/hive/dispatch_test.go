@@ -591,8 +591,8 @@ func TestCheckIsNeverRun(t *testing.T) {
 			if len(ps) != 1 || ps[0].Where != "nowhere" || ps[0].Exit != 125 || !ps[0].Ended {
 				t.Fatalf("turns = %+v", ps)
 			}
-			if got := w.home.Score(time.Now()); got != 0 {
-				t.Errorf("score = %d", got)
+			if got := w.home.Ran(time.Now()); got != 0 {
+				t.Errorf("ran = %d", got)
 			}
 		})
 	}

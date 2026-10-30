@@ -32,9 +32,9 @@ type Link struct {
 const RemoteCommand = "hive-dispatch runner serve"
 
 // testLinks lets the tests reach a runner on this machine through a local
-// command instead of ssh, by its address. Only _test.go files fill it: a
-// runner in runners.json is always ssh://, so ssh is the only command a
-// link ever runs.
+// command instead of ssh, by its address. Only _test.go files and the
+// score's rehearsal (link, in-process) fill it: a runner in runners.json is
+// always ssh://, so ssh is the only command a real runner's link runs.
 var testLinks = map[string][]string{}
 
 // safePath is a hive-dispatch path on the runner, sent as the remote command.

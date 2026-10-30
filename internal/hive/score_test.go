@@ -5,10 +5,10 @@ import (
 	"time"
 )
 
-func TestScoreCountsRunnerTurnsEndedOK(t *testing.T) {
+func TestRanCountsRunnerTurnsEndedOK(t *testing.T) {
 	h := Home(t.TempDir())
 	now := time.Date(2026, 10, 27, 20, 0, 0, 0, time.UTC)
-	if n := h.Score(now); n != 0 {
+	if n := h.Ran(now); n != 0 {
 		t.Fatalf("no records: score %d, want 0", n)
 	}
 	ago := func(d time.Duration) time.Time { return now.Add(-d) }
@@ -28,7 +28,24 @@ func TestScoreCountsRunnerTurnsEndedOK(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if n := h.Score(now); n != 3 {
+	if n := h.Ran(now); n != 3 {
 		t.Fatalf("score %d, want 3", n)
+	}
+}
+
+// The score's rehearsal passes every case on this commit, and reads a broken
+// one as a lower score.
+func TestRehearsalPassesEveryCase(t *testing.T) {
+	scenes := Rehearse(t.TempDir(), built.dispatch, built.fakehive)
+	for _, s := range scenes {
+		if s.Fail != "" {
+			t.Errorf("%s: %s", s.Name, s.Fail)
+		}
+	}
+	if p := Percent(scenes); p != 100 || len(scenes) < 8 {
+		t.Fatalf("percent %d over %d cases", p, len(scenes))
+	}
+	if p := Percent([]Scene{{"a", ""}, {"b", "broke"}}); p != 50 {
+		t.Fatalf("percent of one in two = %d", p)
 	}
 }

@@ -131,6 +131,9 @@ func (h Home) Board(turns int) []string {
 		}
 		out = append(out, line)
 	}
+	if len(rs) > 0 {
+		out = append(out, fmt.Sprintf("worker turns ended ok on a runner in the last 24 hours: %d", h.Ran(time.Now())))
+	}
 	ps := h.Turns()
 	for i := max(0, len(ps)-turns); i < len(ps); i++ {
 		out = append(out, ps[i].String())
@@ -251,10 +254,11 @@ func (h Home) markReported(k string) {
 	}
 }
 
-// Score is the project's score: how many worker turns (runs w-…, not a
-// gate- check) ran on a runner and ended with exit 0 in the day before now,
-// by when they ended (At is when they started).
-func (h Home) Score(now time.Time) int {
+// Ran is how many worker turns (runs w-…, not a gate- check) ran on a
+// runner and ended with exit 0 in the day before now, by when they ended (At
+// is when they started). It reads the day, not the commit (an outage or a
+// quiet day reads low), so it is a board line, not the score (Rehearse).
+func (h Home) Ran(now time.Time) int {
 	n := 0
 	for _, p := range h.Turns() {
 		end := p.At.Add(time.Duration(p.Secs * float64(time.Second)))

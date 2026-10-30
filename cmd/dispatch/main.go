@@ -11,7 +11,8 @@
 //	dispatch remove NAME | off NAME | on NAME
 //	dispatch list                    the runners, their room and the latest turns
 //	dispatch status                  reads every runner now
-//	dispatch score                   turns a runner ran and ended ok in the last 24 hours
+//	dispatch score                   the share of rehearsed cases this commit gets right (0-100)
+//	dispatch ran                     worker turns a runner ran and ended ok in the last 24 hours
 //
 // On the other machine, installed as hive-dispatch:
 //
@@ -31,6 +32,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -55,10 +57,13 @@ func run(args []string) int {
 		return runnerCmd(args[1:])
 	}
 	if args[0] == "score" {
-		// The project's score: no module folder or no records reads 0.
+		return score()
+	}
+	if args[0] == "ran" {
+		// The day's count, for the board: no module folder or no records reads 0.
 		n := 0
 		if h, err := home(); err == nil {
-			n = h.Score(time.Now())
+			n = h.Ran(time.Now())
 		}
 		fmt.Println(n)
 		return 0
@@ -239,6 +244,52 @@ func runnerCmd(args []string) int {
 
 // home is the module's folder: the HOME the Hive's module runner gives it,
 // or DISPATCH_HOME for the person running it by hand.
+// score is the project's score: the percent of rehearsed cases (hive.Rehearse)
+// this binary gets right against a runner on this machine, each case named
+// on stderr. It measures the commit, so iiks1 being down or a quiet day
+// reads the same as any other. It runs from the project's checkout, where it
+// builds the stand-in sandbox (internal/hive/testdata/fakehive); a checkout
+// it can't build that in reads 0.
+func score() int {
+	dir, err := os.MkdirTemp("", "dispatch-score-")
+	if err != nil {
+		return fail(err)
+	}
+	defer os.RemoveAll(dir)
+	self, err := os.Executable()
+	if err == nil {
+		self, err = filepath.EvalSymlinks(self)
+	}
+	fake := filepath.Join(dir, "bin", "hive")
+	if err == nil {
+		if out, e := exec.Command("go", "build", "-o", fake, "./internal/hive/testdata/fakehive").CombinedOutput(); e != nil {
+			err = fmt.Errorf("building the stand-in sandbox: %v %s", e, out)
+		}
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "dispatch score:", err)
+		fmt.Println(0)
+		return 0
+	}
+	// The core's own hive and the runner's are the same file, so nothing is
+	// sent across but the turn; the rehearsal never updates a runner.
+	hive.SelfBinary = func() (string, error) { return self, nil }
+	scenes := hive.Rehearse(filepath.Join(dir, "scenes"), self, fake)
+	for _, s := range scenes {
+		mark := "ok  "
+		if s.Fail != "" {
+			mark = "FAIL"
+		}
+		fmt.Fprintf(os.Stderr, "%s %s", mark, s.Name)
+		if s.Fail != "" {
+			fmt.Fprintf(os.Stderr, ": %s", s.Fail)
+		}
+		fmt.Fprintln(os.Stderr)
+	}
+	fmt.Println(hive.Percent(scenes))
+	return 0
+}
+
 func home() (hive.Home, error) { return homeFrom(os.Getenv) }
 
 func homeFrom(getenv func(string) string) (hive.Home, error) {

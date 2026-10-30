@@ -263,7 +263,8 @@ On the main machine (the module, run as `hive dispatch ...`):
 | `dispatch key` | the Hive's public key, made the first time |
 | `dispatch add NAME ADDRESS --host-key K` | registers a runner (`ssh://user@host[:port][/path/to/hive-dispatch]`)|
 | `dispatch list`, `dispatch status` | runners, their room, the latest turns (`status` reads every runner first) |
-| `dispatch score` | the project's score (`.hive/project.json`): turns a runner ran that ended with exit 0 in the last 24 hours, by when they ended; 0 with no records |
+| `dispatch score` | the project's score (`.hive/project.json`): the percent of rehearsed cases this commit gets right (a worker turn runs on a runner and comes back, a second turn on its cache, stop reaches it, an unreachable or sandbox-less runner falls back here, a turn is given back when the core takes it, a records-reading run and a check stay here), against a runner on this machine and the stand-in sandbox in internal/hive/testdata/fakehive; each case is named on stderr. It reads the commit, not whether iiks1 is up or busy today |
+| `dispatch ran` | worker turns a runner ran that ended with exit 0 in the last 24 hours, by when they ended; 0 with no records. Also a line on the board |
 | `dispatch on|off|remove NAME` | |
 
 On the other machine: `hive-dispatch runner setup`, `hive-dispatch runner
