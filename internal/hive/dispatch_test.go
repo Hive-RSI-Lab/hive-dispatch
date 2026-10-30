@@ -449,10 +449,10 @@ func TestDispatchable(t *testing.T) {
 	if why := Dispatchable(s); why != "" {
 		t.Errorf("a sandboxed turn wasn't: %s", why)
 	}
-	// A run that reads the Hive's records runs here; a worker or reviewer
-	// goes with them empty.
+	// A run that reads the Hive's records runs here (a reviewer checks
+	// goals.md quotes against them); a worker goes with them empty.
 	s.Mounts = append(s.Mounts, spec.Mount{Host: "/h/state", Inside: "/hive/state"})
-	for id, here := range map[string]bool{"w-1": false, "r-1-0": false, "s-1-security-0": false, "sweep-1": true, "stepback-1": true, "j-1": true, "lead-lead": true} {
+	for id, here := range map[string]bool{"w-1": false, "r-1-0": true, "s-1-security-0": true, "sweep-1": true, "stepback-1": true, "j-1": true, "lead-lead": true} {
 		s.ID = id
 		if why := Dispatchable(s); (why != "") != here || here && !strings.Contains(why, "records") {
 			t.Errorf("%s: Dispatchable = %q", id, why)

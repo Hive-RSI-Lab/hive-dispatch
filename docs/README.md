@@ -91,12 +91,14 @@ It is an optional module, not one of the defaults.
   under a second. So a hive-fw, hive-mech or hive-hwde turn proving itself on
   hifi-receiver-2's files finds them there (task 261029-215215: two turns
   ended blocked on an empty folder). `git -C /hive/projects/x log` doesn't
-  work there; a folder git can't list sends nothing.
+  work there; a folder git can't list (not a repo, a symlink, dubious
+  ownership) sends nothing and says so on the turn's dispatch output.
 - **The Hive's records stay here.** `/hive/state` is an empty folder on the
   runner: its cache alone was 6.8 GB and its journal near a GB, live. A run
-  whose work is reading the records (any run but a worker's `w-` or a
-  reviewer's `r-`/`s-` that mounts `/hive/state`: sweeps, step-backs,
-  judges, filers) runs here instead. A worker's brief and `$HIVE_RUN` carry
+  that mounts `/hive/state` and isn't a worker's (`w-`) runs here instead:
+  sweeps, step-backs, judges, filers, and reviews (`r-`, `s-`), which check
+  goals.md quotes against `$HIVE_STATE/chats`. A worker whose brief sends it
+  to the journal finds it empty there. A worker's brief and `$HIVE_RUN` carry
   what it needs, and the knowledge base, which is sent, holds the record's
   story. Anything a Hide mount covers (logins, module homes, private) is
   never read for sending.

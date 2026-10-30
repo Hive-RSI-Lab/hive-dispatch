@@ -48,20 +48,16 @@ func Dispatchable(s spec.Spec) string {
 }
 
 // readsRecords says s mounts the Hive's records and is a run whose work is
-// reading them (a sweep, step-back, judge, filer or lead). The records are
-// far too big and too live to send (10-29: the state folder's cache alone was
-// 6.8 GB, the journal near a GB), so there they are an empty folder. A
-// worker's or reviewer's brief and $HIVE_RUN carry what it needs, and the
-// knowledge base (sent) holds the record's story, so those go.
+// reading them: any run but a worker's. The records are far too big and too
+// live to send (10-29: the state folder's cache alone was 6.8 GB, the journal
+// near a GB), so there they are an empty folder. A reviewer checks goals.md
+// quotes against $HIVE_STATE/chats, so reviews run here too. A worker's brief
+// and $HIVE_RUN carry what it needs, and the knowledge base (sent) holds the
+// record's story, so workers go.
 func readsRecords(s spec.Spec) bool {
 	for _, m := range s.Mounts {
 		if m.Inside == "/hive/state" && !m.Hide {
-			for _, p := range []string{"w-", "r-", "s-"} {
-				if strings.HasPrefix(s.ID, p) {
-					return false
-				}
-			}
-			return true
+			return !strings.HasPrefix(s.ID, "w-")
 		}
 	}
 	return false
@@ -143,17 +139,20 @@ func planFor(s spec.Spec) plan {
 // trackedOnly is what of the projects folder at root goes across: each
 // project's git-tracked files and the folders holding them, not its .git or
 // build outputs. 10-29: the projects held about 280k files in several GB
-// (pll 1.1 GB, hifi-receiver-2 1 GB), their tracked files about 4.5k in
-// 200 MB. A folder git can't list sends nothing.
+// (pll 1.1 GB, hifi-receiver-2 1 GB), their tracked files 6.6k entries in
+// 199 MB. A folder git can't list (not a repo, a symlink, a repo git calls
+// of dubious ownership) sends nothing, and says so on stderr.
 func trackedOnly(root string) map[string]bool {
 	keep := map[string]bool{}
 	entries, _ := os.ReadDir(root)
 	for _, e := range entries {
 		if !e.IsDir() {
+			fmt.Fprintf(os.Stderr, "dispatch: /hive/projects/%s isn't a folder; nothing of it is sent\n", e.Name())
 			continue
 		}
 		out, err := exec.Command("git", "-C", filepath.Join(root, e.Name()), "ls-files", "-z").Output()
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "dispatch: git can't list /hive/projects/%s (%v); nothing of it is sent\n", e.Name(), err)
 			continue
 		}
 		keep[e.Name()] = true
