@@ -18,6 +18,11 @@
 //	hive-dispatch runner setup --hive-key K [--install] [--name N] [--max N] [--hive PATH] [--dir D]
 //	hive-dispatch runner serve       one session on stdin and stdout (an SSH forced command)
 //	hive-dispatch runner status      this machine's room
+//	hive-dispatch runner protocol    the protocol it speaks
+//
+// A runner serves from the dispatch binary the Hive last sent it, kept in
+// its folder, in place of the one installed (see internal/runner/update.go),
+// unless its runner.json says "no_update": true.
 package main
 
 import (
@@ -28,10 +33,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Hive-RSI-Lab/hive-dispatch/internal/hive"
 	"github.com/Hive-RSI-Lab/hive-dispatch/internal/runner"
+	"github.com/Hive-RSI-Lab/hive-dispatch/internal/wire"
 )
 
 func main() { os.Exit(run(os.Args[1:])) }
@@ -204,12 +211,20 @@ func runnerCmd(args []string) int {
 	}
 	switch args[0] {
 	case "serve":
+		if next := runner.Hop(cfg); next != "" {
+			// On success this never returns; on failure this one serves.
+			err := syscall.Exec(next, append([]string{next, "runner"}, args...), append(os.Environ(), runner.Hopped+"=1"))
+			fmt.Fprintf(os.Stderr, "dispatch: serving as the installed binary: exec %s: %v\n", next, err)
+		}
 		if err := runner.Serve(cfg, os.Stdin, os.Stdout); err != nil {
 			return fail(err)
 		}
 		return 0
 	case "status":
 		json.NewEncoder(os.Stdout).Encode(runner.Room(cfg))
+		return 0
+	case "protocol":
+		fmt.Println(wire.Version)
 		return 0
 	case "setup":
 		out, err := runner.Setup(cfg, *hiveKey, *install)

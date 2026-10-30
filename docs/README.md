@@ -142,7 +142,8 @@ It is an optional module, not one of the defaults.
   there. A turn whose hive is built for another kind of machine than the
   runner's, or that the Hive can't read, doesn't go and runs here. A runner
   from before this (protocol 1) answers `protocol 2, this runner speaks 1`
-  and gets no turns until it is rebuilt.
+  and gets no turns until it is rebuilt; one that takes updates (below) is
+  brought onto the Hive's own dispatch binary instead.
 
 ## Setting up a second machine
 
@@ -222,14 +223,33 @@ removing it; `hive dispatch remove iiks1` forgets it and its host key.
 To take the Hive's key off iiks1, delete its line from
 `~/.ssh/authorized_keys` there.
 
-To update the runner after a change to the module (a fix on the runner's
-side of the link only takes effect once iiks1 runs it; a change of protocol,
-such as 2, where turns bring the core's hive, gives it no turns until then),
-as `hive-runner` there:
+**The Hive keeps the runner on its own dispatch binary.** Each status a
+runner answers names the sha256 of the dispatch binary serving it. When that
+isn't the Hive's own (the module rebuilt after a change, or a change of
+protocol, which would leave the runner taking no turns), the Hive sends its
+binary over the same forced command (the `update` op, which a runner takes
+whatever protocol it speaks). The runner checks it is the one named, is built
+for this kind of machine, runs here and says it speaks the Hive's protocol;
+then it keeps it as `bin/dispatch-<sha256>` in its folder
+(`~/.local/share/hive-dispatch`) and names it in `bin/current`. Each later
+`runner serve` the forced command starts execs that one, so the
+`authorized_keys` line and the binary you installed stay as they are, and the
+runner writes nothing outside its folder. One that fails a check is left
+unused, the board says why, and it is offered again after 10 minutes. A
+binary you install by hand after the Hive's last one serves instead, until
+the Hive sends its own again.
+
+This trusts the Hive's key to run a binary of the Hive's choosing as
+`hive-runner` outside the sandbox. To keep the runner on what you installed,
+set `"no_update": true` in `~/.config/hive-dispatch/runner.json`; then
+update it by hand after a change to the module, as `hive-runner` there:
 
 ```sh
 cd hive-dispatch && git pull && go build -o ~/.local/bin/hive-dispatch ./cmd/dispatch
 ```
+
+A runner from before updates (before 10-30) needs that once more: it doesn't
+know the `update` op.
 
 ## Commands
 

@@ -43,6 +43,9 @@ type Config struct {
 	MinFreeMB int               `json:"min_free_mb,omitempty"`
 	Max       int               `json:"max_turns,omitempty"`
 	Tools     map[string]string `json:"tools"` // tool name -> path on this machine, where it isn't on PATH
+	// NoUpdate keeps this runner on the binary the person installed: the
+	// Hive's own isn't taken (Update) and none it sent before is served.
+	NoUpdate bool `json:"no_update,omitempty"`
 }
 
 // Defaults for a runner's room, the same the Hive holds it to.
@@ -90,8 +93,12 @@ func Serve(cfg Config, r io.Reader, w io.Writer) error {
 	if err := c.Expect(wire.JSON, &h); err != nil {
 		return err
 	}
+	if h.Op == "update" {
+		return update(cfg, c)
+	}
 	if h.Version != wire.Version {
-		return c.SendJSON(wire.JSON, wire.Status{Name: cfg.Name, Version: wire.Version, Error: fmt.Sprintf("protocol %d, this runner speaks %d", h.Version, wire.Version)})
+		_, me, _ := Self()
+		return c.SendJSON(wire.JSON, wire.Status{Name: cfg.Name, Version: wire.Version, Binary: me.SHA256, Error: fmt.Sprintf("protocol %d, this runner speaks %d", h.Version, wire.Version)})
 	}
 	switch h.Op {
 	case "status":
@@ -110,6 +117,8 @@ func Room(cfg Config) wire.Status {
 	st.MemFreeMB, st.Load1 = readRoom()
 	st.Running, st.Young = running(cfg)
 	st.Sandbox = probe(cfg)
+	_, me, _ := Self()
+	st.Binary = me.SHA256
 	return st
 }
 
