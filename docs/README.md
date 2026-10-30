@@ -71,8 +71,10 @@ It is an optional module, not one of the defaults.
   and the score on iiks1). The same goes for a tool tree the sandbox reads
   in place from the machine it runs on (it binds `/opt` whole, so a tree
   there is no mount of the turn's and is never sent): a folder under `/opt`
-  here that the turn's checkout names in its tracked files (pll's
-  `project.json` names chip-flow's IIC-OSIC-TOOLS tree) goes among the
+  here that the turn's checkout names in its files (pll's
+  `project.json` names chip-flow's IIC-OSIC-TOOLS tree; read in Go, outside
+  `.git`, following no symlink and running no git on the agent's checkout)
+  goes among the
   turn's tools by its absolute path, and a runner without that folder at the
   same path refuses the turn, so it runs here. A runner from before that
   check looks for it as a program and refuses it the same way. Its `hive agent` ops go through the relayed mailbox
