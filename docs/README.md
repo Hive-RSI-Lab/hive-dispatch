@@ -77,7 +77,21 @@ It is an optional module, not one of the defaults.
   goes among the
   turn's tools by its absolute path, and a runner without that folder at the
   same path refuses the turn, so it runs here. A runner from before that
-  check looks for it as a program and refuses it the same way. Its `hive agent` ops go through the relayed mailbox
+  check looks for it as a program and refuses it the same way. A tree small
+  enough to send (64 MB, 20k entries: chip-flow's 7.7 MB and
+  pdf-material-builder's 5.1 MB, not the EDA toolchain) goes across instead,
+  once. The Hive names it by its content (a symlink like
+  `/opt/pdf-material-builder -> /opt/.pdf-material-builder@<sha>` goes as the
+  folder it points to; no symlink under it is followed). The runner keeps it
+  under `trees/<sha256>` in its dir (dropped after a week unused), checks
+  what it gets against that name, and mounts it at the same path in the
+  sandbox. The runner uses the Hive's copy even where its machine has a tree
+  at that path, because the checkout was written against that version. The
+  sandbox binds `/opt` read-only from the runner's machine, where there is
+  nothing to mount on, so the turn gets an `/opt` of its own: a place for
+  each of the machine's entries there, each bound back, plus the kept trees.
+  A runner from before this ignores the trees and refuses as before. Its
+  `hive agent` ops go through the relayed mailbox
   and wait on the core here like a local turn's: when this machine is loaded
   an op can time out on the runner and its reply still arrive minutes later.
 - **Worker turns only, no checks.** A worker turn needs only its harness on

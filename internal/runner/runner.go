@@ -253,7 +253,14 @@ func turn(cfg Config, c *wire.Conn) error {
 	if why != "" {
 		return refuse(why)
 	}
-	tools, missing := findTools(cfg, t.Tools, hive)
+	kept, needTrees := treesFor(cfg, t)
+	var names []string
+	for _, n := range t.Tools {
+		if _, ok := kept[n]; !ok {
+			names = append(names, n)
+		}
+	}
+	tools, missing := findTools(cfg, names, hive)
 	if len(missing) > 0 {
 		return refuse(wire.NoTool + strings.Join(missing, ", ") + " (put a program on PATH or name its path under \"tools\" in runner.json; a folder must be at the same path here)")
 	}
@@ -268,7 +275,7 @@ func turn(cfg Config, c *wire.Conn) error {
 	os.MkdirAll(empty, 0o755)
 
 	hosts := make([]string, len(t.Mounts))
-	man := wire.Manifests{Mounts: map[int]wire.Manifest{}, NeedHive: needHive}
+	man := wire.Manifests{Mounts: map[int]wire.Manifest{}, NeedHive: needHive, NeedTrees: needTrees}
 	for i, m := range t.Mounts {
 		switch {
 		case m.Hide || m.Kind == wire.KindEmpty:
@@ -288,6 +295,11 @@ func turn(cfg Config, c *wire.Conn) error {
 	}
 	if needHive {
 		if err := takeHive(hive, *t.Hive, c.TarReader()); err != nil {
+			return err
+		}
+	}
+	for _, p := range needTrees {
+		if err := takeTree(kept[p], treeNamed(t, p), c.TarReader()); err != nil {
 			return err
 		}
 	}
@@ -334,6 +346,11 @@ func turn(cfg Config, c *wire.Conn) error {
 		s.Mounts[i] = spec.Mount{Host: hosts[i], Inside: m.Inside, RW: m.RW && !m.Hide && m.Kind == wire.KindRun, Hide: m.Hide}
 	}
 	s.Tools = tools
+	opt, err := treeMounts(filepath.Join(dir, "over"), kept)
+	if err != nil {
+		return err
+	}
+	s.Mounts = append(s.Mounts, opt...)
 	s.Stdin = filepath.Join(dir, "stdin")
 	s.Stdout = filepath.Join(dir, "out")
 	s.StopFile = filepath.Join(dir, "stop")

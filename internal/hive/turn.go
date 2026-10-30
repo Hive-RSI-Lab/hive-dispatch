@@ -334,6 +334,38 @@ func isDir(p string) bool {
 	return err == nil && fi.IsDir()
 }
 
+// keptTree is a tool tree that can go across: the folder it resolves to
+// here and its scan.
+type keptTree struct {
+	root string
+	man  wire.Manifest
+}
+
+// toolTrees are the trees in needs small enough to send (wire.MaxToolTree),
+// named by content: a runner without one keeps the Hive's copy and mounts
+// it at the same path, so a turn whose checkout names /opt/pdf-material-builder
+// (hwde's, 10-30) runs there instead of staying here. A tree that is a
+// symlink (/opt/pdf-material-builder -> /opt/.pdf-material-builder@<sha>)
+// goes as the folder it points to; no symlink under it is followed.
+func toolTrees(needs []string) ([]wire.ToolTree, map[string]keptTree) {
+	var out []wire.ToolTree
+	kept := map[string]keptTree{}
+	for _, p := range needs {
+		root, err := filepath.EvalSymlinks(p)
+		if err != nil {
+			continue
+		}
+		tt, man, err := wire.DescribeTree(root)
+		if err != nil {
+			continue // too big, or unreadable: a runner must have its own
+		}
+		tt.Path = p
+		out = append(out, tt)
+		kept[p] = keptTree{root, man}
+	}
+	return out, kept
+}
+
 // TurnTools are the names the turn's tools go across by (ToolNames) and the
 // tool trees it needs (NeedsPaths): what a runner must have to take it.
 func TurnTools(s spec.Spec) []string { return append(ToolNames(s.Tools), NeedsPaths(s)...) }
@@ -355,6 +387,7 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 		return res
 	}
 	p := planFor(s)
+	var trees map[string]keptTree
 	stdin, err := os.ReadFile(s.Stdin)
 	if err != nil && s.Stdin != "" {
 		return fail(err)
@@ -362,7 +395,9 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 	t := wire.Turn{ID: s.ID, Label: strings.TrimSuffix(filepath.Base(s.Stdout), filepath.Ext(s.Stdout)), Mounts: p.mounts, Stdin: stdin}
 	t.Spec = s
 	t.Spec.Mounts, t.Spec.Tools, t.Spec.Stdin, t.Spec.Stdout, t.Spec.StopFile, t.Spec.Guard, t.Spec.Local = nil, nil, "", "", "", nil, nil
-	t.Tools = TurnTools(s)
+	needs := NeedsPaths(s)
+	t.Tools = append(ToolNames(s.Tools), needs...)
+	t.Trees, trees = toolTrees(needs)
 	hivePath, err := turnHive(s.Tools)
 	if err != nil {
 		return fail(err)
@@ -406,6 +441,20 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 			return fail(err)
 		}
 		res.Placed.Sent += n
+	}
+	for _, path := range man.NeedTrees {
+		tr, ok := trees[path]
+		if !ok {
+			return fail(fmt.Errorf("%s asked for a tool tree the turn hasn't: %s", r.Name, path))
+		}
+		cw := &counter{w: l.TarWriter()}
+		if err := wire.Pack(cw, tr.root, nil, tr.man); err != nil {
+			return fail(err)
+		}
+		if err := cw.w.Close(); err != nil {
+			return fail(l.Why(err))
+		}
+		res.Placed.Sent += cw.n
 	}
 	for i, m := range p.mounts {
 		if m.Hide || m.Kind == wire.KindEmpty {

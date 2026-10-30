@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -815,5 +816,82 @@ func TestTurnNeedsToolTreesItsCheckoutNames(t *testing.T) {
 	}
 	if ps := w.home.Turns(); ps[0].Where != "local" || !strings.Contains(ps[0].Why, "fake: hasn't "+eda) {
 		t.Fatalf("turns = %+v", ps)
+	}
+}
+
+// A small tool tree the runner hasn't (pdf-material-builder, a symlink to
+// its pinned folder) goes across once, is kept there by its content and is
+// mounted at its own path inside the turn's sandbox; the other entries of
+// its parent are bound back beside it.
+func TestSmallToolTreeGoesAcrossOnce(t *testing.T) {
+	opt := t.TempDir()
+	defer func(old []string) { ToolRoots = old }(ToolRoots)
+	ToolRoots = []string{opt}
+	pinned := filepath.Join(opt, ".pdf-material-builder@27ea")
+	os.MkdirAll(filepath.Join(pinned, "scripts"), 0o755)
+	os.WriteFile(filepath.Join(pinned, "SKILL.md"), []byte("skill\n"), 0o644)
+	os.WriteFile(filepath.Join(pinned, "scripts", "build.py"), []byte("print(1)\n"), 0o755)
+	outside := t.TempDir()
+	os.WriteFile(filepath.Join(outside, "secret"), []byte("SECRET-OUTSIDE\n"), 0o644)
+	os.Symlink(outside, filepath.Join(pinned, "out")) // goes as a link, never followed
+	pmb := filepath.Join(opt, "pdf-material-builder")
+	os.Symlink(pinned, pmb)
+	os.MkdirAll(filepath.Join(opt, "eda-toolchain"), 0o755)
+
+	w := newWorld(t)
+	os.WriteFile(filepath.Join(w.work, "flow.sh"), []byte("for d in $PMB "+pmb+"; do :; done\n"), 0o644)
+	if got := NeedsPaths(w.spec); len(got) != 1 || got[0] != pmb {
+		t.Fatalf("needs %v, want [%s]", got, pmb)
+	}
+	if code := w.delegate(); code != 3 {
+		t.Fatalf("exit %d: %s", code, w.read(w.out+".err"))
+	}
+	first := w.home.Turns()[0]
+	if first.Where != "fake" {
+		t.Fatalf("turns = %+v", first)
+	}
+	kept, _ := filepath.Glob(filepath.Join(w.remote, "trees", "*"))
+	if len(kept) != 1 {
+		t.Fatalf("trees kept there: %v", kept)
+	}
+	out := w.read(w.out)
+	for _, want := range []string{
+		"mount " + pmb + " from " + kept[0] + ": SKILL.md out scripts\n",
+		"mount " + opt + "/eda-toolchain from " + opt + "/eda-toolchain: \n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("turn output lacks %q:\n%s", want, out)
+		}
+	}
+	if !regexp.MustCompile(`mount ` + regexp.QuoteMeta(opt) + ` from \S+/over/0: \.pdf-material-builder@27ea eda-toolchain pdf-material-builder\n`).MatchString(out) {
+		t.Errorf("no cover over %s:\n%s", opt, out)
+	}
+	if l, err := os.Readlink(filepath.Join(kept[0], "out")); err != nil || l != outside {
+		t.Errorf("the symlink under the tree went as %q, %v", l, err)
+	}
+	if _, err := os.Stat(filepath.Join(kept[0], "scripts", "build.py")); err != nil {
+		t.Error(err)
+	}
+
+	// The second turn takes the kept copy: the tree isn't sent again.
+	os.WriteFile(w.out, nil, 0o644)
+	if code := w.delegate(); code != 3 {
+		t.Fatalf("second turn: exit %d: %s", code, w.read(w.out+".err"))
+	}
+	if again, _ := filepath.Glob(filepath.Join(w.remote, "trees", "*")); len(again) != 1 {
+		t.Fatalf("trees kept there: %v", again)
+	}
+	if !strings.Contains(w.read(w.out), "mount "+pmb+" from "+kept[0]) {
+		t.Errorf("second turn: %s", w.read(w.out))
+	}
+
+	// A changed tree is another copy, sent and kept beside the first.
+	os.WriteFile(filepath.Join(pinned, "SKILL.md"), []byte("skill v2\n"), 0o644)
+	os.WriteFile(w.out, nil, 0o644)
+	if code := w.delegate(); code != 3 {
+		t.Fatalf("third turn: exit %d: %s", code, w.read(w.out+".err"))
+	}
+	if again, _ := filepath.Glob(filepath.Join(w.remote, "trees", "*")); len(again) != 2 {
+		t.Fatalf("trees kept there: %v", again)
 	}
 }
