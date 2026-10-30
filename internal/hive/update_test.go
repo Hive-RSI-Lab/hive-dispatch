@@ -2,7 +2,9 @@ package hive
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -96,4 +98,29 @@ func TestRunnerRefusesABinaryThatDoesntRun(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(w.remote, "bin", "current")); err == nil {
 		t.Error("bin/current names it")
 	}
+}
+
+// A protocol bump never strands a runner: one installed a protocol behind
+// the Hive's answers the Hive's status read with the protocol it speaks and
+// the binary serving, takes the Hive's binary over the update op, and takes
+// turns as it from the next session on, with nobody at that machine.
+func TestRunnerAProtocolBehindTakesTheUpdateThenTurns(t *testing.T) {
+	out, err := exec.Command(built.behind, "runner", "protocol").Output()
+	if err != nil || strings.TrimSpace(string(out)) != strconv.Itoa(wire.Version-1) {
+		t.Fatalf("the runner built behind speaks %q (%v), want %d", out, err, wire.Version-1)
+	}
+	w := newWorldOn(t, built.behind)
+	r, _ := w.home.Get("fake")
+	s := w.home.Probe(r)
+	if s.Reach != "" || s.Binary != sha(t, built.dispatch) || s.Version != wire.Version {
+		u, _ := w.home.LastUpdate("fake")
+		t.Fatalf("after one read the runner serves %q at protocol %d, want %s at %d (reach %q, update %+v)", s.Binary, s.Version, sha(t, built.dispatch), wire.Version, s.Reach, u)
+	}
+	if why := r.Room(s); why != "" {
+		t.Fatalf("no room after the update: %s", why)
+	}
+	if code := w.delegate(); code != 3 {
+		t.Fatalf("exit %d after the update: %s", code, w.read(w.out+".err"))
+	}
+	w.checkTurnRan()
 }
