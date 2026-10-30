@@ -1,18 +1,21 @@
 package hive
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Hive-RSI-Lab/hive-dispatch/internal/spec"
@@ -232,14 +235,15 @@ func sendFile(l *Link, path string, size int64) (int64, error) {
 var ToolRoots = []string{"/opt"}
 
 // NeedsPaths are the tool trees under ToolRoots on this machine that the
-// turn's checkout names in its git-tracked files (pll's project.json names
+// turn's checkout names in its files (pll's project.json names
 // /opt/eda-toolchain/iic-osic-tools-2026.09). They go across among the
 // turn's tools, by absolute path, and a runner without one refuses the turn
 // before it starts, so it runs here: 10-30, a pll worker turn sent to iiks1
 // found no tree there and ran no gate (problem p-261030-015156). A runner
 // from before it checked folders looks for such a name as a program and
-// refuses it the same way. A checkout git can't search counts as naming
-// what its .hive/project.json names.
+// refuses it the same way. The checkout is the agent's to write, so it is
+// read in Go, never through git (whose config there it could plant): its
+// regular files outside .git, no symlink followed, none over maxNamed.
 func NeedsPaths(s spec.Spec) []string {
 	work := ""
 	for _, m := range s.Mounts {
@@ -262,20 +266,67 @@ func NeedsPaths(s spec.Spec) []string {
 	if len(cands) == 0 {
 		return nil
 	}
-	project, _ := os.ReadFile(filepath.Join(work, ".hive", "project.json"))
+	return named(work, cands)
+}
+
+// maxNamed is the largest file NeedsPaths reads: a tool path is named in a
+// script or a config, not in a build's output.
+const maxNamed = 4 << 20
+
+// named are the paths in cands that some file under dir contains.
+func named(dir string, cands []string) []string {
+	found := map[string]bool{}
+	filepath.WalkDir(dir, func(f string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		b, ok := readPlain(f)
+		if !ok {
+			return nil
+		}
+		for _, p := range cands {
+			if !found[p] && bytes.Contains(b, []byte(p)) {
+				found[p] = true
+			}
+		}
+		if len(found) == len(cands) {
+			return filepath.SkipAll
+		}
+		return nil
+	})
 	var out []string
 	for _, p := range cands {
-		err := exec.Command("git", "-c", "safe.directory=*", "-C", work, "grep", "-q", "-F", "-e", p, "--").Run()
-		var ee *exec.ExitError
-		switch {
-		case err == nil:
-			out = append(out, p)
-		case errors.As(err, &ee) && ee.ExitCode() == 1: // searched, not named
-		case strings.Contains(string(project), p):
+		if found[p] {
 			out = append(out, p)
 		}
 	}
 	return out
+}
+
+// readPlain reads f if it is still a regular file no bigger than maxNamed
+// when opened: the checkout is live, so a file walked can since be a
+// symlink or a FIFO, and neither is followed or waited on.
+func readPlain(f string) ([]byte, bool) {
+	h, err := os.OpenFile(f, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, false
+	}
+	defer h.Close()
+	fi, err := h.Stat()
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxNamed {
+		return nil, false
+	}
+	b, err := io.ReadAll(io.LimitReader(h, maxNamed))
+	return b, err == nil
 }
 
 func isDir(p string) bool {

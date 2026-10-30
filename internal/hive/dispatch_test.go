@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -767,26 +768,34 @@ func TestTurnNeedsToolTreesItsCheckoutNames(t *testing.T) {
 	if got := NeedsPaths(w.spec); len(got) != 0 {
 		t.Fatalf("a checkout naming no tree needs %v", got)
 	}
-	// Not a repo git can search (the world's .git is a stub): project.json counts.
 	os.MkdirAll(filepath.Join(w.work, ".hive"), 0o755)
 	os.WriteFile(filepath.Join(w.work, ".hive", "project.json"), []byte(`{"test": "EDA_TOOLCHAIN=${EDA_TOOLCHAIN:-`+eda+`/iic-osic-tools-2026.09} bash tests/check.sh"}`), 0o644)
 	if got := NeedsPaths(w.spec); len(got) != 1 || got[0] != eda {
 		t.Fatalf("needs %v, want [%s]", got, eda)
 	}
 
-	// A real repo: what its tracked files name, not its untracked ones.
+	// A repo the agent planted: its git config runs nothing, a symlink out
+	// of it and what .git holds name nothing.
 	repo := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "ran")
 	os.WriteFile(filepath.Join(repo, "flow.sh"), []byte("tree="+other+"/chrome\n"), 0o644)
-	os.WriteFile(filepath.Join(repo, "scratch.txt"), []byte(eda+"\n"), 0o644)
-	for _, args := range [][]string{{"init", "-q"}, {"add", "flow.sh"}} {
-		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v %s", args, err, out)
-		}
+	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
+	os.WriteFile(filepath.Join(repo, ".git", "config"), []byte("[core]\n\tfsmonitor = touch "+marker+"\n\tpager = touch "+marker+"\n"), 0o644)
+	os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte(eda+"\n"), 0o644)
+	outside := t.TempDir()
+	os.WriteFile(filepath.Join(outside, "x"), []byte(eda+"\n"), 0o644)
+	os.Symlink(outside, filepath.Join(repo, "link"))
+	os.Symlink(filepath.Join(outside, "x"), filepath.Join(repo, "linkfile"))
+	if err := syscall.Mkfifo(filepath.Join(repo, "fifo"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	s := w.spec
 	s.Mounts = append([]spec.Mount{{Host: repo, Inside: "/work", RW: true}}, s.Mounts[1:]...)
 	if got := NeedsPaths(s); len(got) != 1 || got[0] != other {
 		t.Fatalf("needs %v, want [%s]", got, other)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the checkout's git config ran a command")
 	}
 
 	// The runner has the tree (it is this machine): the turn runs there.
