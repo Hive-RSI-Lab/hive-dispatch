@@ -12,13 +12,25 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"sync"
 )
 
 // Version is the protocol both sides must speak. 2: a turn carries the
 // Hive's own hive binary (Turn.Hive), so a runner from before it, whose
 // turns would run an older hive CLI than the core's, takes none.
-const Version = 2
+var Version = 2
+
+// protocol, set at link time (-ldflags "-X .../wire.protocol=1"), builds a
+// dispatch that speaks another protocol: a test's runner one protocol behind
+// the Hive's, which must still take the Hive's update.
+var protocol string
+
+func init() {
+	if v, err := strconv.Atoi(protocol); err == nil && v > 0 {
+		Version = v
+	}
+}
 
 // Frame types.
 const (

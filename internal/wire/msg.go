@@ -23,7 +23,9 @@ import (
 //	runner  J UpdateDone
 //
 // A runner takes "update" whatever version the Hello says, so a Hive whose
-// protocol moved ahead can still bring the runner up to its own.
+// protocol moved ahead can still bring the runner up to its own. So the
+// update op's messages, and the Status a runner of another protocol answers
+// with (version, binary, error), stay as they are across protocol bumps.
 //
 // Any J message over MaxFrame goes as B... J: its pieces in Big frames, the
 // last in the J frame.

@@ -20,16 +20,19 @@ import (
 // bins builds the dispatch binary (the runner side) and the fake hive binary
 // that stands in for `hive sandbox-exec` once per test run.
 // next is the same dispatch built another way (-trimpath), so its sha256
-// differs: a Hive whose binary moved ahead of the runner's.
-var built struct{ dispatch, next, fakehive string }
+// differs: a Hive whose binary moved ahead of the runner's. behind is the
+// dispatch speaking the protocol before this one: a runner the Hive's
+// protocol bump left behind.
+var built struct{ dispatch, next, behind, fakehive string }
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "dispatch-bin-")
 	if err != nil {
 		panic(err)
 	}
-	built.dispatch, built.next, built.fakehive = filepath.Join(dir, "hive-dispatch"), filepath.Join(dir, "next"), filepath.Join(dir, "hive")
-	for _, b := range [][]string{{built.dispatch, "../../cmd/dispatch"}, {built.next, "../../cmd/dispatch", "-trimpath"}, {built.fakehive, "./testdata/fakehive"}} {
+	built.dispatch, built.next, built.behind, built.fakehive = filepath.Join(dir, "hive-dispatch"), filepath.Join(dir, "next"), filepath.Join(dir, "behind"), filepath.Join(dir, "hive")
+	older := fmt.Sprintf("-X=github.com/Hive-RSI-Lab/hive-dispatch/internal/wire.protocol=%d", wire.Version-1)
+	for _, b := range [][]string{{built.dispatch, "../../cmd/dispatch"}, {built.next, "../../cmd/dispatch", "-trimpath"}, {built.behind, "../../cmd/dispatch", "-ldflags=" + older}, {built.fakehive, "./testdata/fakehive"}} {
 		if out, err := exec.Command("go", append([]string{"build", "-o", b[0]}, append(b[2:], b[1])...)...).CombinedOutput(); err != nil {
 			panic(string(out))
 		}
@@ -56,7 +59,10 @@ type world struct {
 // as the core's sandboxSpec builds it, and registers a runner that is the
 // dispatch binary on this machine, reached through a local command instead
 // of SSH.
-func newWorld(t *testing.T) *world {
+func newWorld(t *testing.T) *world { return newWorldOn(t, built.dispatch) }
+
+// newWorldOn is newWorld with the runner installed as the dispatch binary named.
+func newWorldOn(t *testing.T, dispatch string) *world {
 	root := t.TempDir()
 	w := &world{t: t, home: Home(filepath.Join(root, "module")), remote: filepath.Join(root, "remote")}
 	p := func(parts ...string) string { return filepath.Join(append([]string{root}, parts...)...) }
@@ -93,7 +99,7 @@ func newWorld(t *testing.T) *world {
 	write(filepath.Join(bin, "claude"), "#!/bin/sh\n")
 	os.Chmod(filepath.Join(bin, "claude"), 0o755)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	addr := localRunner(built.dispatch + " runner serve --config /nonexistent --name fake --max 2 --max-load 1000 --min-free-mb 1 --dir " + w.remote + " --hive " + built.fakehive)
+	addr := localRunner(dispatch + " runner serve --config /nonexistent --name fake --max 2 --max-load 1000 --min-free-mb 1 --dir " + w.remote + " --hive " + built.fakehive)
 	if err := w.home.Add(Runner{Name: "fake", Address: addr, MinFreeMB: 1, MaxLoad: 1000}, testHostKey); err != nil {
 		t.Fatal(err)
 	}
