@@ -192,6 +192,68 @@ func ToolNames(tools []string) []string {
 	return out
 }
 
+// ToolRoots are where tool trees live that a sandbox reads in place from
+// the machine it runs on: the Hive's sandbox binds /opt whole, so a tree
+// there (the IIC-OSIC-TOOLS tree chip-flow runs, /opt/eda-toolchain) is no
+// mount of the spec's and is never sent. A test sets it.
+var ToolRoots = []string{"/opt"}
+
+// NeedsPaths are the tool trees under ToolRoots on this machine that the
+// turn's checkout names in its git-tracked files (pll's project.json names
+// /opt/eda-toolchain/iic-osic-tools-2026.09). They go across among the
+// turn's tools, by absolute path, and a runner without one refuses the turn
+// before it starts, so it runs here: 10-30, a pll worker turn sent to iiks1
+// found no tree there and ran no gate (problem p-261030-015156). A runner
+// from before it checked folders looks for such a name as a program and
+// refuses it the same way. A checkout git can't search counts as naming
+// what its .hive/project.json names.
+func NeedsPaths(s spec.Spec) []string {
+	work := ""
+	for _, m := range s.Mounts {
+		if m.Inside == "/work" && !m.Hide {
+			work = m.Host
+		}
+	}
+	if work == "" {
+		return nil
+	}
+	var cands []string
+	for _, root := range ToolRoots {
+		entries, _ := os.ReadDir(root)
+		for _, e := range entries {
+			if p := filepath.Join(root, e.Name()); isDir(p) {
+				cands = append(cands, p)
+			}
+		}
+	}
+	if len(cands) == 0 {
+		return nil
+	}
+	project, _ := os.ReadFile(filepath.Join(work, ".hive", "project.json"))
+	var out []string
+	for _, p := range cands {
+		err := exec.Command("git", "-c", "safe.directory=*", "-C", work, "grep", "-q", "-F", "-e", p, "--").Run()
+		var ee *exec.ExitError
+		switch {
+		case err == nil:
+			out = append(out, p)
+		case errors.As(err, &ee) && ee.ExitCode() == 1: // searched, not named
+		case strings.Contains(string(project), p):
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func isDir(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
+}
+
+// TurnTools are the names the turn's tools go across by (ToolNames) and the
+// tool trees it needs (NeedsPaths): what a runner must have to take it.
+func TurnTools(s spec.Spec) []string { return append(ToolNames(s.Tools), NeedsPaths(s)...) }
+
 // notFound is how sandbox-exec refuses a tool it can't find.
 var notFound = regexp.MustCompile(`tool "([^"]+)" not found on this machine`)
 
@@ -216,7 +278,7 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 	t := wire.Turn{ID: s.ID, Label: strings.TrimSuffix(filepath.Base(s.Stdout), filepath.Ext(s.Stdout)), Mounts: p.mounts, Stdin: stdin}
 	t.Spec = s
 	t.Spec.Mounts, t.Spec.Tools, t.Spec.Stdin, t.Spec.Stdout, t.Spec.StopFile, t.Spec.Guard, t.Spec.Local = nil, nil, "", "", "", nil, nil
-	t.Tools = ToolNames(s.Tools)
+	t.Tools = TurnTools(s)
 
 	l, err := h.Dial(r)
 	if err != nil {
