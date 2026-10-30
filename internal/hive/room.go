@@ -15,9 +15,15 @@ import (
 const Fresh = time.Minute
 
 // Probe reads a runner's status over a fresh link, records it, and returns it.
+// A runner serving another dispatch binary than the Hive's (an older one, or
+// one of another protocol, which takes no turns) is sent the Hive's first and
+// read again.
 func (h Home) Probe(r Runner) Seen {
-	s := Seen{At: time.Now()}
 	st, err := h.status(r)
+	if path, bin, ok := h.behind(r, st); ok && h.Update(r, path, bin) == nil {
+		st, err = h.status(r)
+	}
+	s := Seen{At: time.Now()}
 	if err != nil {
 		s.Reach = err.Error()
 	} else {

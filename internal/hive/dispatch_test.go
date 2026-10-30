@@ -19,19 +19,23 @@ import (
 
 // bins builds the dispatch binary (the runner side) and the fake hive binary
 // that stands in for `hive sandbox-exec` once per test run.
-var built struct{ dispatch, fakehive string }
+// next is the same dispatch built another way (-trimpath), so its sha256
+// differs: a Hive whose binary moved ahead of the runner's.
+var built struct{ dispatch, next, fakehive string }
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "dispatch-bin-")
 	if err != nil {
 		panic(err)
 	}
-	built.dispatch, built.fakehive = filepath.Join(dir, "hive-dispatch"), filepath.Join(dir, "hive")
-	for out, pkg := range map[string]string{built.dispatch: "../../cmd/dispatch", built.fakehive: "./testdata/fakehive"} {
-		if b, err := exec.Command("go", "build", "-o", out, pkg).CombinedOutput(); err != nil {
-			panic(string(b))
+	built.dispatch, built.next, built.fakehive = filepath.Join(dir, "hive-dispatch"), filepath.Join(dir, "next"), filepath.Join(dir, "hive")
+	for _, b := range [][]string{{built.dispatch, "../../cmd/dispatch"}, {built.next, "../../cmd/dispatch", "-trimpath"}, {built.fakehive, "./testdata/fakehive"}} {
+		if out, err := exec.Command("go", append([]string{"build", "-o", b[0]}, append(b[2:], b[1])...)...).CombinedOutput(); err != nil {
+			panic(string(out))
 		}
 	}
+	// The Hive's own binary is the runner's: no test but the update's sends one.
+	SelfBinary = func() (string, error) { return built.dispatch, nil }
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
