@@ -6,6 +6,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,6 +91,14 @@ func main() {
 	os.WriteFile(filepath.Join(work, "kb-seen.txt"), kb, 0o644)
 	state, _ := os.ReadDir(at["/hive/state"])
 	os.WriteFile(filepath.Join(work, "state-entries.txt"), []byte(fmt.Sprint(len(state))), 0o644)
+	var seen []string
+	filepath.WalkDir(at["/hive/projects"], func(p string, d fs.DirEntry, err error) error {
+		if rel, _ := filepath.Rel(at["/hive/projects"], p); err == nil && !d.IsDir() {
+			seen = append(seen, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	os.WriteFile(filepath.Join(work, "projects-seen.txt"), []byte(strings.Join(seen, "\n")), 0o644)
 	os.WriteFile(filepath.Join(at["/hive/home"], "session.jsonl"), []byte("session\n"), 0o644)
 	os.WriteFile(filepath.Join(box, "notes.md"), []byte("notes from the turn\n"), 0o644)
 

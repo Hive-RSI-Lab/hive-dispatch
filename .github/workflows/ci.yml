@@ -1,0 +1,48 @@
+name: ci
+# The project's test (.hive/project.json "test") on GitHub's standard hosted runner of this
+# public repo, free with no minute cap: the person's word (10-29) is no capped or paid runners.
+# The Hive reads the job as "test (ubuntu-latest)" (forge_tests in .hive/project.json); keep it
+# unnamed. Modelled on ihsan-sa/hive's .github/workflows/ci.yml.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  # A PR's superseded run is cancelled; every push to main gets a group of its own, keyed by its
+  # commit, so none is left pending without a result.
+  group: ci-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # ssh-keygen comes with the runner's openssh-client; the tests need nothing else.
+      - name: the test (go test ./...)
+        shell: bash
+        run: go test ./... 2>&1 | tee "$RUNNER_TEMP/suite.log"; test "${PIPESTATUS[0]}" = 0
+        env:
+          GIT_AUTHOR_NAME: ci
+          GIT_AUTHOR_EMAIL: ci@localhost
+          GIT_COMMITTER_NAME: ci
+          GIT_COMMITTER_EMAIL: ci@localhost
+      # Job logs need a login; annotations don't, so the Hive can read what failed.
+      - name: name the failing tests
+        if: failure()
+        shell: bash
+        run: |
+          grep -n -e '--- FAIL' -e '^panic:' -e '^FAIL' "$RUNNER_TEMP/suite.log" | head -20 | while IFS=: read -r n _; do
+            echo "::error::$(sed -n "$n,$((n + 30))p" "$RUNNER_TEMP/suite.log" | awk 'BEGIN { ORS = "%0A" } { gsub(/\r/, ""); gsub(/%/, "%25"); print substr($0, 1, 300) }')"
+          done

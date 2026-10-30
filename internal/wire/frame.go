@@ -15,8 +15,10 @@ import (
 	"sync"
 )
 
-// Version is the protocol both sides must speak.
-const Version = 1
+// Version is the protocol both sides must speak. 2: a turn carries the
+// Hive's own hive binary (Turn.Hive), so a runner from before it, whose
+// turns would run an older hive CLI than the core's, takes none.
+const Version = 2
 
 // Frame types.
 const (

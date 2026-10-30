@@ -50,6 +50,13 @@ It is an optional module, not one of the defaults.
   and removed when the turn ends. module.json declares this. That binary is
   trusted because the core wrote the spec naming it (its own hive binary);
   nothing the module or a runner sends chooses it.
+- **Or gives it back, when the core takes it.** A core that sets
+  `EXECUTOR_GIVE_BACK=1` for `turn` (ihsan-sa/hive#2066) takes back a turn
+  handed over that hasn't started. Then a turn that can't go isn't run here
+  by the module: it ends at once with exit 125 and a `dispatch: not run:
+  <why>` line in its `.err`, recorded as `nowhere`, and the core runs it here
+  itself under its pace and strain hold, which a turn the module runs here
+  would skip.
 - **A turn goes only where its harness is.** The runner looks for each of a
   turn's tools (the hive binary, the path `"tools"` in runner.json names, then
   PATH, `~/.local/bin` and `/usr/local/bin`) before it takes the turn, and
@@ -61,7 +68,16 @@ It is an optional module, not one of the defaults.
   iiks1 turns, install the harness there (and log it in) or name it under
   `"tools"`. With claude installed for `hive-runner`, real worker turns run
   there (the first: task 261028-141143, 2026-10-29, which ran `go test ./...`
-  and the score on iiks1). Its `hive agent` ops go through the relayed mailbox
+  and the score on iiks1). The same goes for a tool tree the sandbox reads
+  in place from the machine it runs on (it binds `/opt` whole, so a tree
+  there is no mount of the turn's and is never sent): a folder under `/opt`
+  here that the turn's checkout names in its files (pll's
+  `project.json` names chip-flow's IIC-OSIC-TOOLS tree; read in Go, outside
+  `.git`, following no symlink and running no git on the agent's checkout)
+  goes among the
+  turn's tools by its absolute path, and a runner without that folder at the
+  same path refuses the turn, so it runs here. A runner from before that
+  check looks for it as a program and refuses it the same way. Its `hive agent` ops go through the relayed mailbox
   and wait on the core here like a local turn's: when this machine is loaded
   an op can time out on the runner and its reply still arrive minutes later.
 - **Worker turns only, no checks.** A worker turn needs only its harness on
@@ -82,11 +98,26 @@ It is an optional module, not one of the defaults.
   folders. The spec file is deleted once read on both sides, and the turn's
   folder on the runner (home, prompt, spec) is wiped when the turn ends, or
   at the next session if the runner was cut off.
-- **Not sent:** other projects (`/hive/projects`) and the Hive's records
-  (`/hive/state`) are empty folders on the runner, and anything a Hide mount
-  covers (logins, module homes, private) is never read for sending. A turn
-  that needs to read other projects or the journal sees nothing there; that
-  is the price of not copying the Hive's records to another machine.
+- **Other projects go as their tracked files.** `/hive/projects` is cached on
+  the runner like the knowledge base, modules and tools, and sent as changes,
+  but only each project's git-tracked files (`git ls-files` per project
+  folder), not its `.git` or what it built. On 10-29 the projects held about
+  280k files in several GB and their tracked files 6.6k entries in 199 MB:
+  the first turn sends that, later ones what changed, and the scan takes
+  under a second. So a hive-fw, hive-mech or hive-hwde turn proving itself on
+  hifi-receiver-2's files finds them there (task 261029-215215: two turns
+  ended blocked on an empty folder). `git -C /hive/projects/x log` doesn't
+  work there; a folder git can't list (not a repo, a symlink, dubious
+  ownership) sends nothing and says so on the turn's dispatch output.
+- **The Hive's records stay here.** `/hive/state` is an empty folder on the
+  runner: its cache alone was 6.8 GB and its journal near a GB, live. A run
+  that mounts `/hive/state` and isn't a worker's (`w-`) runs here instead:
+  sweeps, step-backs, judges, filers, and reviews (`r-`, `s-`), which check
+  goals.md quotes against `$HIVE_STATE/chats`. A worker whose brief sends it
+  to the journal finds it empty there. A worker's brief and `$HIVE_RUN` carry
+  what it needs, and the knowledge base, which is sent, holds the record's
+  story. Anything a Hide mount covers (logins, module homes, private) is
+  never read for sending.
 - **The link is authenticated both ways and opens from the Hive only.** The
   Hive dials the runner over SSH with a key of its own (kept in the module's
   HOME, which no agent can read), and only to the host key you pinned.
@@ -98,6 +129,21 @@ It is an optional module, not one of the defaults.
   from a hive binary installed on it, so a turn there can write only its own
   folders, reaches the network only through the egress proxy (with the
   turn's allow list), and can't reach iiks1's local services or network.
+- **A turn there runs the core's own hive CLI.** The `hive` a turn calls
+  (`hive agent heavy`, `finish`, ...) is the core's binary, the one it named
+  among the turn's tools, not the release installed on the runner: the Hive
+  updates every 6 hours, and an older hive parses newer ops wrong (10-29:
+  `hive agent heavy ... -- python3 loop.py` on iiks1 gave `expected --key`).
+  The Hive sends that binary with the turn the first time, the runner keeps
+  it by its sha256 under its `hive/` folder (dropping copies no turn used in a
+  day), and later turns of the same release send only its name. It runs only
+  inside the sandbox, as `/hive/bin/hive`; `sandbox-exec` is still the
+  runner's own hive, so nothing the Hive sends runs outside the sandbox
+  there. A turn whose hive is built for another kind of machine than the
+  runner's, or that the Hive can't read, doesn't go and runs here. A runner
+  from before this (protocol 1) answers `protocol 2, this runner speaks 1`
+  and gets no turns until it is rebuilt; one that takes updates (below) is
+  brought onto the Hive's own dispatch binary instead.
 
 ## Setting up a second machine
 
@@ -107,9 +153,9 @@ machine a separate non-admin Linux user to run turns as (below:
 binary.
 
 **1. On the other machine (iiks1)**, as `hive-runner`, install the hive binary
-with the same release as the main machine (v0.1.136 or later: the installer,
-or copy `~/.local/bin/hive` from the main machine), and check its sandbox
-works:
+(v0.1.136 or later: the installer, or copy `~/.local/bin/hive` from the main
+machine; it runs only the sandbox, as each turn's `hive` CLI comes from the
+Hive), and check its sandbox works:
 
 ```sh
 hive sandbox-probe           # should print: ok <sandbox>
@@ -177,12 +223,33 @@ removing it; `hive dispatch remove iiks1` forgets it and its host key.
 To take the Hive's key off iiks1, delete its line from
 `~/.ssh/authorized_keys` there.
 
-To update the runner after a change to the module (a fix on the runner's
-side of the link only takes effect once iiks1 runs it), as `hive-runner` there:
+**The Hive keeps the runner on its own dispatch binary.** Each status a
+runner answers names the sha256 of the dispatch binary serving it. When that
+isn't the Hive's own (the module rebuilt after a change, or a change of
+protocol, which would leave the runner taking no turns), the Hive sends its
+binary over the same forced command (the `update` op, which a runner takes
+whatever protocol it speaks). The runner checks it is the one named, is built
+for this kind of machine, runs here and says it speaks the Hive's protocol;
+then it keeps it as `bin/dispatch-<sha256>` in its folder
+(`~/.local/share/hive-dispatch`) and names it in `bin/current`. Each later
+`runner serve` the forced command starts execs that one, so the
+`authorized_keys` line and the binary you installed stay as they are, and the
+runner writes nothing outside its folder. One that fails a check is left
+unused, the board says why, and it is offered again after 10 minutes. A
+binary you install by hand after the Hive's last one serves instead, until
+the Hive sends its own again.
+
+This trusts the Hive's key to run a binary of the Hive's choosing as
+`hive-runner` outside the sandbox. To keep the runner on what you installed,
+set `"no_update": true` in `~/.config/hive-dispatch/runner.json`; then
+update it by hand after a change to the module, as `hive-runner` there:
 
 ```sh
 cd hive-dispatch && git pull && go build -o ~/.local/bin/hive-dispatch ./cmd/dispatch
 ```
+
+A runner from before updates (before 10-30) needs that once more: it doesn't
+know the `update` op.
 
 ## Commands
 

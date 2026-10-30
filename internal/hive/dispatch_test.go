@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -18,19 +19,23 @@ import (
 
 // bins builds the dispatch binary (the runner side) and the fake hive binary
 // that stands in for `hive sandbox-exec` once per test run.
-var built struct{ dispatch, fakehive string }
+// next is the same dispatch built another way (-trimpath), so its sha256
+// differs: a Hive whose binary moved ahead of the runner's.
+var built struct{ dispatch, next, fakehive string }
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "dispatch-bin-")
 	if err != nil {
 		panic(err)
 	}
-	built.dispatch, built.fakehive = filepath.Join(dir, "hive-dispatch"), filepath.Join(dir, "hive")
-	for out, pkg := range map[string]string{built.dispatch: "../../cmd/dispatch", built.fakehive: "./testdata/fakehive"} {
-		if b, err := exec.Command("go", "build", "-o", out, pkg).CombinedOutput(); err != nil {
-			panic(string(b))
+	built.dispatch, built.next, built.fakehive = filepath.Join(dir, "hive-dispatch"), filepath.Join(dir, "next"), filepath.Join(dir, "hive")
+	for _, b := range [][]string{{built.dispatch, "../../cmd/dispatch"}, {built.next, "../../cmd/dispatch", "-trimpath"}, {built.fakehive, "./testdata/fakehive"}} {
+		if out, err := exec.Command("go", append([]string{"build", "-o", b[0]}, append(b[2:], b[1])...)...).CombinedOutput(); err != nil {
+			panic(string(out))
 		}
 	}
+	// The Hive's own binary is the runner's: no test but the update's sends one.
+	SelfBinary = func() (string, error) { return built.dispatch, nil }
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
@@ -290,6 +295,49 @@ func TestFallsBackHere(t *testing.T) {
 	}
 }
 
+// When the core takes turns back (EXECUTOR_GIVE_BACK=1), a turn that can't
+// go is given back unstarted instead of run here past the core's holds: exit
+// 125 and the "dispatch: not run:" line the core reads. One that can go still
+// runs on the runner.
+func TestGivesBackWhenCoreTakesIt(t *testing.T) {
+	t.Setenv(GiveBackEnv, "1")
+	for name, edit := range map[string]func(w *world){
+		"granted a local service": func(w *world) { w.spec.Local = []string{"127.0.0.1:11434"} },
+		"runner unreachable": func(w *world) {
+			w.home.Add(Runner{Name: "fake", Address: localRunner("/nonexistent/runner")}, testHostKey)
+		},
+		"runner has no sandbox": func(w *world) {
+			w.home.Add(Runner{Name: "fake", Address: localRunner(built.dispatch + " runner serve --config /nonexistent --max 1 --max-load 1000 --min-free-mb 1 --dir " + w.remote + " --hive /nonexistent/hive"), MinFreeMB: 1, MaxLoad: 1000}, testHostKey)
+		},
+		"no runner": func(w *world) { w.home.Remove("fake") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t)
+			edit(w)
+			if code := w.delegate(); code != 125 {
+				t.Fatalf("exit %d, want 125; err: %s", code, w.read(w.out+".err"))
+			}
+			if raw, _ := os.ReadFile(w.out); strings.Contains(string(raw), "got:") {
+				t.Errorf("the turn ran: %q", raw)
+			}
+			if got := w.read(w.out + ".err"); !strings.Contains(got, "dispatch: not run: ") {
+				t.Errorf(".err = %q", got)
+			}
+			ps := w.home.Turns()
+			if len(ps) != 1 || ps[0].Where != "nowhere" || ps[0].Exit != 125 || !ps[0].Ended || ps[0].Error == "" {
+				t.Fatalf("turns = %+v", ps)
+			}
+		})
+	}
+	t.Run("runner has room", func(t *testing.T) {
+		w := newWorld(t)
+		if code := w.delegate(); code != 3 {
+			t.Fatalf("exit %d, want the turn's own 3; err: %s", code, w.read(w.out+".err"))
+		}
+		w.checkTurnRan()
+	})
+}
+
 // A turn that runs here finds the harness the core names bare, though
 // sandbox-exec runs with the module's HOME and a PATH that lacks it: dispatch
 // gives sandbox-exec its absolute path, from the Hive's bin.
@@ -414,7 +462,7 @@ func TestPlanCarriesNoHiddenOrHiveRecords(t *testing.T) {
 		kinds[m.Inside] = m.Kind
 	}
 	want := map[string]string{"/work": "run", "/hive/run": "run", "/hive/box": "run", "/hive/home": "run", "/hive/kb": "shared",
-		"/hive/modules": "shared", "/hive/tools": "shared", "/hive/projects": "empty", "/hive/state": "empty"}
+		"/hive/modules": "shared", "/hive/tools": "shared", "/hive/projects": "shared", "/hive/state": "empty"}
 	for in, k := range want {
 		if kinds[in] != k {
 			t.Errorf("%s goes as %q, want %q", in, kinds[in], k)
@@ -448,6 +496,51 @@ func TestDispatchable(t *testing.T) {
 	s.Cwd = "/work"
 	if why := Dispatchable(s); why != "" {
 		t.Errorf("a sandboxed turn wasn't: %s", why)
+	}
+	// A run that reads the Hive's records runs here (a reviewer checks
+	// goals.md quotes against them); a worker goes with them empty.
+	s.Mounts = append(s.Mounts, spec.Mount{Host: "/h/state", Inside: "/hive/state"})
+	for id, here := range map[string]bool{"w-1": false, "r-1-0": true, "s-1-security-0": true, "sweep-1": true, "stepback-1": true, "j-1": true, "lead-lead": true} {
+		s.ID = id
+		if why := Dispatchable(s); (why != "") != here || here && !strings.Contains(why, "records") {
+			t.Errorf("%s: Dispatchable = %q", id, why)
+		}
+	}
+}
+
+// Another project's tracked files reach a turn there, not its .git or what
+// it built.
+func TestProjectsGoTrackedOnly(t *testing.T) {
+	w := newWorld(t)
+	app := filepath.Join(filepath.Dir(w.work), "projects", "app")
+	os.MkdirAll(filepath.Join(app, "firmware", "main"), 0o755)
+	os.MkdirAll(filepath.Join(app, "build"), 0o755)
+	os.WriteFile(filepath.Join(app, "firmware", "main", "main.c"), []byte("int main;\n"), 0o644)
+	os.WriteFile(filepath.Join(app, "README.md"), []byte("app\n"), 0o644)
+	os.WriteFile(filepath.Join(app, "build", "big.bin"), []byte("built"), 0o644)
+	os.WriteFile(filepath.Join(app, "untracked.txt"), []byte("x"), 0o644)
+	os.MkdirAll(filepath.Join(filepath.Dir(app), "notgit"), 0o755)
+	os.WriteFile(filepath.Join(filepath.Dir(app), "notgit", "f"), []byte("x"), 0o644)
+	for _, args := range [][]string{{"init", "-q"}, {"add", "firmware", "README.md"}} {
+		if out, err := exec.Command("git", append([]string{"-C", app}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	if code := w.delegate(); code != 3 {
+		t.Fatalf("exit %d: %s", code, w.read(w.out+".err"))
+	}
+	if got := w.read(filepath.Join(w.work, "projects-seen.txt")); got != "app/README.md\napp/firmware/main/main.c" {
+		t.Errorf("the turn saw %q under /hive/projects", got)
+	}
+	// A second turn sees a change, and a file no longer tracked goes.
+	os.WriteFile(filepath.Join(app, "firmware", "main", "main.c"), []byte("int main(void);\n"), 0o644)
+	exec.Command("git", "-C", app, "rm", "-q", "--cached", "README.md").Run()
+	os.WriteFile(w.out, nil, 0o644)
+	if code := w.delegate(); code != 3 {
+		t.Fatalf("second turn: exit %d: %s", code, w.read(w.out+".err"))
+	}
+	if got := w.read(filepath.Join(w.work, "projects-seen.txt")); got != "app/firmware/main/main.c" {
+		t.Errorf("the second turn saw %q", got)
 	}
 }
 
@@ -596,5 +689,133 @@ func TestBurstStopsAtRoom(t *testing.T) {
 	h2.Pick()
 	if r, why, _ := h2.Pick(); r.Name != "" || !strings.Contains(why, "full") {
 		t.Fatalf("third Pick at a cap of 2 = %q (%s)", r.Name, why)
+	}
+}
+
+// A turn there runs the core's own hive as `hive`, not the release the
+// runner has installed: the Hive sends it once, the runner keeps it by its
+// sha256, and later turns use the copy kept. The runner's own hive still
+// runs sandbox-exec.
+func TestTurnRunsTheCoresHive(t *testing.T) {
+	w := newWorld(t)
+	raw, err := os.ReadFile(built.fakehive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	core := filepath.Join(t.TempDir(), "hive")
+	os.WriteFile(core, append(raw, "newer release"...), 0o755) // a hive other than the runner's
+	w.spec.Tools = []string{core, "claude"}
+	hb, err := wire.DescribeHive(core)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := filepath.Join(w.remote, "hive", hb.SHA256)
+	if code := w.delegate(); code != 3 {
+		t.Fatalf("exit %d: %s", code, w.read(w.out+".err"))
+	}
+	if out := w.read(w.out); !strings.Contains(out, "tools: "+kept+" ") {
+		t.Errorf("the turn's hive isn't the core's, kept at %s:\n%s", kept, out)
+	}
+	if got, _ := os.ReadFile(kept); !bytes.Equal(got, append(raw, "newer release"...)) {
+		t.Errorf("the hive kept there isn't the core's (%d bytes)", len(got))
+	}
+	first := w.home.Turns()[0].Sent
+	if first < hb.Size {
+		t.Errorf("sent %d bytes, less than the hive binary's %d", first, hb.Size)
+	}
+	os.WriteFile(w.out, nil, 0o644)
+	if code := w.delegate(); code != 3 {
+		t.Fatalf("second turn: exit %d: %s", code, w.read(w.out+".err"))
+	}
+	if again := w.home.Turns()[0].Sent; again >= hb.Size {
+		t.Errorf("the second turn sent the hive binary again (%d bytes)", again)
+	}
+	if out := w.read(w.out); !strings.Contains(out, "tools: "+kept+" ") {
+		t.Errorf("the second turn's hive isn't the one kept:\n%s", out)
+	}
+}
+
+// A hive binary the Hive can't describe (not an executable it can read)
+// doesn't go: the turn runs here, as the core's.
+func TestTurnWhoseHiveCantGoRunsHere(t *testing.T) {
+	w := newWorld(t)
+	core := filepath.Join(t.TempDir(), "hive")
+	os.WriteFile(core, []byte("#!/bin/sh\nexit 7\n"), 0o755)
+	w.spec.Tools = []string{core, "claude"}
+	t.Setenv(GiveBackEnv, "1")
+	if code := w.delegate(); code != 125 {
+		t.Fatalf("exit %d, want 125 (given back): %s", code, w.read(w.out+".err"))
+	}
+	if errs := w.read(w.out + ".err"); !strings.Contains(errs, "hive binary can't go") {
+		t.Errorf(".err doesn't say why: %s", errs)
+	}
+	if _, err := os.Stat(filepath.Join(w.remote, "turns")); err == nil {
+		if ents, _ := os.ReadDir(filepath.Join(w.remote, "turns")); len(ents) != 0 {
+			t.Errorf("a turn folder was made there: %v", ents)
+		}
+	}
+}
+
+// A tool tree the sandbox reads in place (/opt/eda-toolchain) goes among the
+// turn's tools when its checkout names it, so only a runner that has it
+// takes the turn.
+func TestTurnNeedsToolTreesItsCheckoutNames(t *testing.T) {
+	opt := t.TempDir()
+	defer func(old []string) { ToolRoots = old }(ToolRoots)
+	ToolRoots = []string{opt}
+	eda, other := filepath.Join(opt, "eda-toolchain"), filepath.Join(opt, "google")
+	os.MkdirAll(eda, 0o755)
+	os.MkdirAll(other, 0o755)
+	os.WriteFile(filepath.Join(opt, "a-file"), []byte("x"), 0o644)
+
+	w := newWorld(t)
+	if got := NeedsPaths(w.spec); len(got) != 0 {
+		t.Fatalf("a checkout naming no tree needs %v", got)
+	}
+	os.MkdirAll(filepath.Join(w.work, ".hive"), 0o755)
+	os.WriteFile(filepath.Join(w.work, ".hive", "project.json"), []byte(`{"test": "EDA_TOOLCHAIN=${EDA_TOOLCHAIN:-`+eda+`/iic-osic-tools-2026.09} bash tests/check.sh"}`), 0o644)
+	if got := NeedsPaths(w.spec); len(got) != 1 || got[0] != eda {
+		t.Fatalf("needs %v, want [%s]", got, eda)
+	}
+
+	// A repo the agent planted: its git config runs nothing, a symlink out
+	// of it and what .git holds name nothing.
+	repo := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "ran")
+	os.WriteFile(filepath.Join(repo, "flow.sh"), []byte("tree="+other+"/chrome\n"), 0o644)
+	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
+	os.WriteFile(filepath.Join(repo, ".git", "config"), []byte("[core]\n\tfsmonitor = touch "+marker+"\n\tpager = touch "+marker+"\n"), 0o644)
+	os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte(eda+"\n"), 0o644)
+	outside := t.TempDir()
+	os.WriteFile(filepath.Join(outside, "x"), []byte(eda+"\n"), 0o644)
+	os.Symlink(outside, filepath.Join(repo, "link"))
+	os.Symlink(filepath.Join(outside, "x"), filepath.Join(repo, "linkfile"))
+	if err := syscall.Mkfifo(filepath.Join(repo, "fifo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := w.spec
+	s.Mounts = append([]spec.Mount{{Host: repo, Inside: "/work", RW: true}}, s.Mounts[1:]...)
+	if got := NeedsPaths(s); len(got) != 1 || got[0] != other {
+		t.Fatalf("needs %v, want [%s]", got, other)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the checkout's git config ran a command")
+	}
+
+	// The runner has the tree (it is this machine): the turn runs there.
+	if code := w.delegate(); code != 3 {
+		t.Fatalf("exit %d: %s", code, w.read(w.out+".err"))
+	}
+	if ps := w.home.Turns(); ps[0].Where != "fake" {
+		t.Fatalf("turns = %+v", ps)
+	}
+	// A runner that lacked it is passed over for such a turn.
+	w.home.Lack("fake", []string{eda})
+	os.WriteFile(w.out, nil, 0o644)
+	if code := w.delegate(); code != 3 {
+		t.Fatalf("exit %d: %s", code, w.read(w.out+".err"))
+	}
+	if ps := w.home.Turns(); ps[0].Where != "local" || !strings.Contains(ps[0].Why, "fake: hasn't "+eda) {
+		t.Fatalf("turns = %+v", ps)
 	}
 }

@@ -123,6 +123,9 @@ func (h Home) Board(turns int) []string {
 		if ok {
 			line += " (read " + s.At.Format("15:04:05") + ")"
 		}
+		if u, have := h.LastUpdate(r.Name); have && u.Error != "" && (!ok || u.SHA256 != s.Binary) {
+			line += "; it didn't take the Hive's dispatch binary (" + u.At.Format("15:04:05") + "): " + u.Error
+		}
 		if lack := h.Lacks(r.Name); len(lack) > 0 {
 			line += "; turns needing " + strings.Join(lack, ", ") + " run here: it hasn't them"
 		}

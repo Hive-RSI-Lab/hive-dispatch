@@ -8,5 +8,8 @@
       "cmd/dispatch/",
       "internal/hive/module.go"
     ]
-  }
+  },
+  "forge_tests": [
+    "test (ubuntu-latest)"
+  ]
 }

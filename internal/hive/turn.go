@@ -1,16 +1,21 @@
 package hive
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Hive-RSI-Lab/hive-dispatch/internal/spec"
@@ -39,8 +44,26 @@ func Dispatchable(s spec.Spec) string {
 		return "it was granted a service on this machine (" + strings.Join(s.Local, ", ") + ")"
 	case s.Stdout == "":
 		return "it has no output file"
+	case readsRecords(s):
+		return "it reads the Hive's records (/hive/state), which stay on this machine"
 	}
 	return ""
+}
+
+// readsRecords says s mounts the Hive's records and is a run whose work is
+// reading them: any run but a worker's. The records are far too big and too
+// live to send (10-29: the state folder's cache alone was 6.8 GB, the journal
+// near a GB), so there they are an empty folder. A reviewer checks goals.md
+// quotes against $HIVE_STATE/chats, so reviews run here too. A worker's brief
+// and $HIVE_RUN carry what it needs, and the knowledge base (sent) holds the
+// record's story, so workers go.
+func readsRecords(s spec.Spec) bool {
+	for _, m := range s.Mounts {
+		if m.Inside == "/hive/state" && !m.Hide {
+			return !strings.HasPrefix(s.ID, "w-")
+		}
+	}
+	return false
 }
 
 // IsCheck says s is a check the core hands over (its ID is "gate-..."), not
@@ -49,15 +72,16 @@ func IsCheck(s spec.Spec) bool { return strings.HasPrefix(s.ID, "gate-") }
 
 // planFor decides how each mount goes across. The turn's own folders go
 // whole; the knowledge base, modules and tools are cached there and sent as
-// changes; other projects and the Hive's records stay here, as empty folders
-// there. Anything a Hide mount covers is never sent.
+// changes; so are the other projects, but only each one's git-tracked files
+// (trackedOnly); the Hive's records stay here, an empty folder there.
+// Anything a Hide mount covers is never sent.
 func planFor(s spec.Spec) plan {
 	var p plan
 	kind := func(m spec.Mount) string {
 		switch {
-		case m.Inside == "/hive/projects" || m.Inside == "/hive/state":
+		case m.Inside == "/hive/state":
 			return wire.KindEmpty
-		case !m.RW && (m.Inside == "/hive/kb" || m.Inside == "/hive/modules" || m.Inside == "/hive/tools" || strings.HasPrefix(m.Inside, "/hive/modules/")):
+		case !m.RW && (m.Inside == "/hive/kb" || m.Inside == "/hive/projects" || m.Inside == "/hive/modules" || m.Inside == "/hive/tools" || strings.HasPrefix(m.Inside, "/hive/modules/")):
 			return wire.KindShared
 		}
 		return wire.KindRun
@@ -94,7 +118,14 @@ func planFor(s spec.Spec) plan {
 			}
 		}
 		box := m.Inside == "/hive/box"
+		var tracked map[string]bool
+		if m.Inside == "/hive/projects" && mp.Kind == wire.KindShared {
+			tracked = trackedOnly(m.Host)
+		}
 		skip := func(rel string) bool {
+			if tracked != nil && !tracked[rel] {
+				return true
+			}
 			for _, c := range covered {
 				if rel == c || strings.HasPrefix(rel, c+"/") {
 					return true
@@ -106,6 +137,35 @@ func planFor(s spec.Spec) plan {
 		p.hosts, p.skips = append(p.hosts, m.Host), append(p.skips, skip)
 	}
 	return p
+}
+
+// trackedOnly is what of the projects folder at root goes across: each
+// project's git-tracked files and the folders holding them, not its .git or
+// build outputs. 10-29: the projects held about 280k files in several GB
+// (pll 1.1 GB, hifi-receiver-2 1 GB), their tracked files 6.6k entries in
+// 199 MB. A folder git can't list (not a repo, a symlink, a repo git calls
+// of dubious ownership) sends nothing, and says so on stderr.
+func trackedOnly(root string) map[string]bool {
+	keep := map[string]bool{}
+	entries, _ := os.ReadDir(root)
+	for _, e := range entries {
+		if !e.IsDir() {
+			fmt.Fprintf(os.Stderr, "dispatch: /hive/projects/%s isn't a folder; nothing of it is sent\n", e.Name())
+			continue
+		}
+		out, err := exec.Command("git", "-C", filepath.Join(root, e.Name()), "ls-files", "-z").Output()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "dispatch: git can't list /hive/projects/%s (%v); nothing of it is sent\n", e.Name(), err)
+			continue
+		}
+		keep[e.Name()] = true
+		for _, f := range strings.Split(string(out), "\x00") {
+			for rel := path.Join(e.Name(), f); f != "" && !keep[rel]; rel = path.Dir(rel) {
+				keep[rel] = true
+			}
+		}
+	}
+	return keep
 }
 
 // Result is how a dispatched turn ended.
@@ -135,6 +195,149 @@ func ToolNames(tools []string) []string {
 	return out
 }
 
+// turnHive is the hive binary among tools (the one that goes across as
+// "hive"), or "" when the turn names none. It must be an absolute path to a
+// file: it is what the turn runs as `hive` on the runner.
+func turnHive(tools []string) (string, error) {
+	for _, tool := range tools {
+		if ToolNames([]string{tool})[0] != "hive" {
+			continue
+		}
+		if fi, err := os.Stat(tool); !filepath.IsAbs(tool) || err != nil || !fi.Mode().IsRegular() {
+			return "", fmt.Errorf("the turn's hive binary %q isn't an absolute path to a file", tool)
+		}
+		return tool, nil
+	}
+	return "", nil
+}
+
+// sendFile sends the first size bytes of the file at path as one stream.
+func sendFile(l *Link, path string, size int64) (int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	cw := &counter{w: l.TarWriter()}
+	if _, err := io.CopyN(cw, f, size); err != nil {
+		return cw.n, l.Why(err)
+	}
+	if err := cw.w.Close(); err != nil {
+		return cw.n, l.Why(err)
+	}
+	return cw.n, nil
+}
+
+// ToolRoots are where tool trees live that a sandbox reads in place from
+// the machine it runs on: the Hive's sandbox binds /opt whole, so a tree
+// there (the IIC-OSIC-TOOLS tree chip-flow runs, /opt/eda-toolchain) is no
+// mount of the spec's and is never sent. A test sets it.
+var ToolRoots = []string{"/opt"}
+
+// NeedsPaths are the tool trees under ToolRoots on this machine that the
+// turn's checkout names in its files (pll's project.json names
+// /opt/eda-toolchain/iic-osic-tools-2026.09). They go across among the
+// turn's tools, by absolute path, and a runner without one refuses the turn
+// before it starts, so it runs here: 10-30, a pll worker turn sent to iiks1
+// found no tree there and ran no gate (problem p-261030-015156). A runner
+// from before it checked folders looks for such a name as a program and
+// refuses it the same way. The checkout is the agent's to write, so it is
+// read in Go, never through git (whose config there it could plant): its
+// regular files outside .git, no symlink followed, none over maxNamed.
+func NeedsPaths(s spec.Spec) []string {
+	work := ""
+	for _, m := range s.Mounts {
+		if m.Inside == "/work" && !m.Hide {
+			work = m.Host
+		}
+	}
+	if work == "" {
+		return nil
+	}
+	var cands []string
+	for _, root := range ToolRoots {
+		entries, _ := os.ReadDir(root)
+		for _, e := range entries {
+			if p := filepath.Join(root, e.Name()); isDir(p) {
+				cands = append(cands, p)
+			}
+		}
+	}
+	if len(cands) == 0 {
+		return nil
+	}
+	return named(work, cands)
+}
+
+// maxNamed is the largest file NeedsPaths reads: a tool path is named in a
+// script or a config, not in a build's output.
+const maxNamed = 4 << 20
+
+// named are the paths in cands that some file under dir contains.
+func named(dir string, cands []string) []string {
+	found := map[string]bool{}
+	filepath.WalkDir(dir, func(f string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		b, ok := readPlain(f)
+		if !ok {
+			return nil
+		}
+		for _, p := range cands {
+			if !found[p] && bytes.Contains(b, []byte(p)) {
+				found[p] = true
+			}
+		}
+		if len(found) == len(cands) {
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	var out []string
+	for _, p := range cands {
+		if found[p] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// readPlain reads f if it is still a regular file no bigger than maxNamed
+// when opened: the checkout is live, so a file walked can since be a
+// symlink or a FIFO, and neither is followed or waited on.
+func readPlain(f string) ([]byte, bool) {
+	h, err := os.OpenFile(f, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, false
+	}
+	defer h.Close()
+	fi, err := h.Stat()
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxNamed {
+		return nil, false
+	}
+	b, err := io.ReadAll(io.LimitReader(h, maxNamed))
+	return b, err == nil
+}
+
+func isDir(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
+}
+
+// TurnTools are the names the turn's tools go across by (ToolNames) and the
+// tool trees it needs (NeedsPaths): what a runner must have to take it.
+func TurnTools(s spec.Spec) []string { return append(ToolNames(s.Tools), NeedsPaths(s)...) }
+
 // notFound is how sandbox-exec refuses a tool it can't find.
 var notFound = regexp.MustCompile(`tool "([^"]+)" not found on this machine`)
 
@@ -159,7 +362,18 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 	t := wire.Turn{ID: s.ID, Label: strings.TrimSuffix(filepath.Base(s.Stdout), filepath.Ext(s.Stdout)), Mounts: p.mounts, Stdin: stdin}
 	t.Spec = s
 	t.Spec.Mounts, t.Spec.Tools, t.Spec.Stdin, t.Spec.Stdout, t.Spec.StopFile, t.Spec.Guard, t.Spec.Local = nil, nil, "", "", "", nil, nil
-	t.Tools = ToolNames(s.Tools)
+	t.Tools = TurnTools(s)
+	hivePath, err := turnHive(s.Tools)
+	if err != nil {
+		return fail(err)
+	}
+	if hivePath != "" {
+		hb, err := wire.DescribeHive(hivePath)
+		if err != nil {
+			return fail(fmt.Errorf("the turn's hive binary can't go: %w", err))
+		}
+		t.Hive = &hb
+	}
 
 	l, err := h.Dial(r)
 	if err != nil {
@@ -182,6 +396,16 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 			res.Lacks = strings.Split(names, ", ")
 		}
 		return fail(fmt.Errorf("%s won't take it: %s", r.Name, man.Error))
+	}
+	if man.NeedHive {
+		if t.Hive == nil {
+			return fail(fmt.Errorf("%s asked for a hive binary the turn hasn't", r.Name))
+		}
+		n, err := sendFile(l, hivePath, t.Hive.Size)
+		if err != nil {
+			return fail(err)
+		}
+		res.Placed.Sent += n
 	}
 	for i, m := range p.mounts {
 		if m.Hide || m.Kind == wire.KindEmpty {
@@ -299,7 +523,7 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 				res.Started, res.Lacks = false, []string{m[1]}
 				res.Err = fmt.Errorf("%s hasn't the turn's tool %q", r.Name, m[1])
 				res.Placed.Error = res.Err.Error()
-				fmt.Fprintf(errf, "dispatch: %v; nothing ran there, so it runs here\n", res.Err)
+				fmt.Fprintf(errf, "dispatch: %v; nothing ran there\n", res.Err)
 			}
 			return res
 		default:

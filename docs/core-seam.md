@@ -87,3 +87,11 @@ module programs come to run in a sandbox where that nested start doesn't
 work, the fallback moves to the core. `room` already answers before the core
 hands a turn over, so the core can keep a "no room" turn and start it locally,
 and `turn` would exit without starting anything.
+
+The core now does that (ihsan-sa/hive#2066): it sets `EXECUTOR_GIVE_BACK=1`
+in the environment of `turn` (runner.GiveBackEnv). With it, a turn that
+can't go ends unstarted with exit 125 and a `dispatch: not run: <why>` line
+in its `.err`; the core's `Runs.endTurn` reads that (`givenBack`) as no
+retry, parks the turn with its messages, and runs its next turn here under
+the pace and the strain hold. Without it (an older core) the module still
+runs the turn here itself.

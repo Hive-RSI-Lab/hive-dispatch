@@ -24,6 +24,11 @@ import (
 // run: module.json doesn't serve the `checks` hook, and one handed over
 // anyway is not run at all (NotRun), so the core reads "can't run" and puts
 // it back in its line here.
+//
+// When the core takes turns back (GiveBackEnv is 1 in the environment), a
+// turn that can't go isn't run here either: it is given back unstarted
+// (GiveBack), and the core runs it here under its pace and strain hold,
+// which a turn run here by the module would skip.
 func (h Home) Delegate(specPath, runner string) int {
 	s, err := spec.Read(specPath)
 	os.Remove(specPath) // it carries the turn's token
@@ -35,6 +40,9 @@ func (h Home) Delegate(specPath, runner string) int {
 		return h.NotRun(s, "dispatch carries worker turns, not checks")
 	}
 	here := h.Local
+	if os.Getenv(GiveBackEnv) == "1" {
+		here = h.GiveBack
+	}
 	if why := Dispatchable(s); why != "" {
 		return here(s, why)
 	}
@@ -48,7 +56,7 @@ func (h Home) Delegate(specPath, runner string) int {
 		h.Claim(r, turn)
 	} else {
 		var why string
-		if r, why, err = h.PickFor(ToolNames(s.Tools), turn); err != nil || r.Name == "" {
+		if r, why, err = h.PickFor(TurnTools(s), turn); err != nil || r.Name == "" {
 			if err != nil {
 				why = err.Error()
 			}
@@ -65,6 +73,23 @@ func (h Home) Delegate(specPath, runner string) int {
 	}
 	h.Record(res.Placed)
 	return res.Code
+}
+
+// GiveBackEnv, set to 1 by the core in the environment of `turn`, says the
+// core takes back a turn given back before it starts (ihsan-sa/hive#2066).
+const GiveBackEnv = "EXECUTOR_GIVE_BACK"
+
+// GiveBack ends a turn that can't go without starting it, so the core runs
+// it here itself: exit 125 and a "dispatch: not run: <why>" line in its
+// .err, which the core reads as given back (core.givenBack). Nothing
+// reaches its stdout.
+func (h Home) GiveBack(s spec.Spec, why string) int {
+	if f, err := appendFile(s.Stdout + ".err"); err == nil {
+		fmt.Fprintln(f, "dispatch: not run:", why)
+		f.Close()
+	}
+	h.Record(Placed{At: time.Now(), Run: s.ID, Turn: filepath.Base(s.Stdout), Where: "nowhere", Exit: 125, Ended: true, Error: "given back to the core unstarted: " + why})
+	return 125
 }
 
 // NotRun ends a check without running it: run here it would sit outside the

@@ -13,10 +13,17 @@ import (
 //
 //	Hive    J Hello{op: "status"}         runner  J Status
 //	Hive    J Hello{op: "turn"}, J Turn   runner  J Manifests (of its cached shared mounts)
+//	Hive    if Manifests.NeedHive: T..., E (the hive binary Turn.Hive names)
 //	Hive    per run or shared mount: J Tree, T..., E
 //	runner  J Started, then O/R output and M mailbox requests as they come;
 //	Hive    I mailbox responses and S (stop) as they come
 //	runner  X ExitCode, then per RW mount that isn't Throwaway: J Tree, T..., E; then Z
+//	Hive    J Hello{op: "update"}, J Update   runner  J UpdateAsk
+//	Hive    if UpdateAsk.Need: T..., E (the Hive's own dispatch binary)
+//	runner  J UpdateDone
+//
+// A runner takes "update" whatever version the Hello says, so a Hive whose
+// protocol moved ahead can still bring the runner up to its own.
 //
 // Any J message over MaxFrame goes as B... J: its pieces in Big frames, the
 // last in the J frame.
@@ -24,7 +31,7 @@ import (
 // Hello opens a session.
 type Hello struct {
 	Version int    `json:"version"`
-	Op      string `json:"op"` // status | turn
+	Op      string `json:"op"` // status | turn | update
 }
 
 // Status is a runner's room.
@@ -39,6 +46,9 @@ type Status struct {
 	Young      int     `json:"young,omitempty"` // of those, how many started too lately to show in the load and memory yet
 	Max        int     `json:"max"`
 	Sandbox    string  `json:"sandbox"` // what `hive sandbox-probe` said, or why it failed
+	// Binary is the sha256 of the dispatch binary serving: the Hive sends
+	// its own when they differ (Update).
+	Binary string `json:"binary,omitempty"`
 	Error      string  `json:"error,omitempty"`
 }
 
@@ -71,12 +81,27 @@ type Turn struct {
 	Mounts []MountPlan `json:"mounts"`
 	Stdin  []byte      `json:"stdin"`
 	Tools  []string    `json:"tools"` // base names of the tools to expose
+	// Hive is the hive binary the core named among the turn's tools. It is
+	// the turn's `hive` inside the sandbox there too, so its `hive agent`
+	// ops are the core's own CLI, not whatever release the runner has
+	// installed. The runner's own hive still runs sandbox-exec.
+	Hive *HiveBin `json:"hive,omitempty"`
+}
+
+// HiveBin names a hive binary by its content.
+type HiveBin struct {
+	SHA256  string `json:"sha256"`
+	Size    int64  `json:"size"`
+	Machine string `json:"machine"` // its ELF machine (EM_X86_64): a runner of another kind can't run it
 }
 
 // Manifests is the runner's cached state of the shared mounts, by index.
 type Manifests struct {
 	Mounts map[int]Manifest `json:"mounts"`
-	Error  string           `json:"error,omitempty"` // the runner won't take the turn, and why
+	// NeedHive asks for the hive binary Turn.Hive names: the runner hasn't
+	// it cached yet.
+	NeedHive bool   `json:"need_hive,omitempty"`
+	Error    string `json:"error,omitempty"` // the runner won't take the turn, and why
 }
 
 // Tree heads a tar stream for one mount.
@@ -151,3 +176,22 @@ func TakeMail(dir string, send func(Mail) error) error {
 // NoTool starts a runner's refusal of a turn whose tools it can't find; the
 // names follow, comma-separated, then " (" and the rest of the why.
 const NoTool = "no such tool here: "
+
+// Update offers the runner the Hive's own dispatch binary, to serve its
+// sessions from then on in place of the one the person installed.
+type Update struct {
+	Bin     HiveBin `json:"bin"`
+	Version int     `json:"version"` // the protocol it speaks, which the runner checks it says
+}
+
+// UpdateAsk is the runner's answer to Update.
+type UpdateAsk struct {
+	Need  bool   `json:"need,omitempty"`  // send it: the runner hasn't it yet
+	Error string `json:"error,omitempty"` // the runner won't take it, and why
+}
+
+// UpdateDone says the binary sent serves the runner's sessions from now on,
+// or why not.
+type UpdateDone struct {
+	Error string `json:"error,omitempty"`
+}
