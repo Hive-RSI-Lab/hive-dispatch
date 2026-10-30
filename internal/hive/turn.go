@@ -192,6 +192,39 @@ func ToolNames(tools []string) []string {
 	return out
 }
 
+// turnHive is the hive binary among tools (the one that goes across as
+// "hive"), or "" when the turn names none. It must be an absolute path to a
+// file: it is what the turn runs as `hive` on the runner.
+func turnHive(tools []string) (string, error) {
+	for _, tool := range tools {
+		if ToolNames([]string{tool})[0] != "hive" {
+			continue
+		}
+		if fi, err := os.Stat(tool); !filepath.IsAbs(tool) || err != nil || !fi.Mode().IsRegular() {
+			return "", fmt.Errorf("the turn's hive binary %q isn't an absolute path to a file", tool)
+		}
+		return tool, nil
+	}
+	return "", nil
+}
+
+// sendFile sends the first size bytes of the file at path as one stream.
+func sendFile(l *Link, path string, size int64) (int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	cw := &counter{w: l.TarWriter()}
+	if _, err := io.CopyN(cw, f, size); err != nil {
+		return cw.n, l.Why(err)
+	}
+	if err := cw.w.Close(); err != nil {
+		return cw.n, l.Why(err)
+	}
+	return cw.n, nil
+}
+
 // notFound is how sandbox-exec refuses a tool it can't find.
 var notFound = regexp.MustCompile(`tool "([^"]+)" not found on this machine`)
 
@@ -217,6 +250,17 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 	t.Spec = s
 	t.Spec.Mounts, t.Spec.Tools, t.Spec.Stdin, t.Spec.Stdout, t.Spec.StopFile, t.Spec.Guard, t.Spec.Local = nil, nil, "", "", "", nil, nil
 	t.Tools = ToolNames(s.Tools)
+	hivePath, err := turnHive(s.Tools)
+	if err != nil {
+		return fail(err)
+	}
+	if hivePath != "" {
+		hb, err := wire.DescribeHive(hivePath)
+		if err != nil {
+			return fail(fmt.Errorf("the turn's hive binary can't go: %w", err))
+		}
+		t.Hive = &hb
+	}
 
 	l, err := h.Dial(r)
 	if err != nil {
@@ -239,6 +283,16 @@ func (h Home) Send(r Runner, s spec.Spec) Result {
 			res.Lacks = strings.Split(names, ", ")
 		}
 		return fail(fmt.Errorf("%s won't take it: %s", r.Name, man.Error))
+	}
+	if man.NeedHive {
+		if t.Hive == nil {
+			return fail(fmt.Errorf("%s asked for a hive binary the turn hasn't", r.Name))
+		}
+		n, err := sendFile(l, hivePath, t.Hive.Size)
+		if err != nil {
+			return fail(err)
+		}
+		res.Placed.Sent += n
 	}
 	for i, m := range p.mounts {
 		if m.Hide || m.Kind == wire.KindEmpty {

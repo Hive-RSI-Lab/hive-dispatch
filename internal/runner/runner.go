@@ -9,6 +9,9 @@
 package runner
 
 import (
+	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +21,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -236,7 +240,11 @@ func turn(cfg Config, c *wire.Conn) error {
 	if sb := probe(cfg); !strings.HasPrefix(sb, "ok") {
 		return refuse("no sandbox here: " + sb)
 	}
-	tools, missing := findTools(cfg, t.Tools)
+	hive, needHive, why := hiveFor(cfg, t)
+	if why != "" {
+		return refuse(why)
+	}
+	tools, missing := findTools(cfg, t.Tools, hive)
 	if len(missing) > 0 {
 		return refuse(wire.NoTool + strings.Join(missing, ", ") + " (put it on PATH or name its path under \"tools\" in runner.json)")
 	}
@@ -251,7 +259,7 @@ func turn(cfg Config, c *wire.Conn) error {
 	os.MkdirAll(empty, 0o755)
 
 	hosts := make([]string, len(t.Mounts))
-	man := wire.Manifests{Mounts: map[int]wire.Manifest{}}
+	man := wire.Manifests{Mounts: map[int]wire.Manifest{}, NeedHive: needHive}
 	for i, m := range t.Mounts {
 		switch {
 		case m.Hide || m.Kind == wire.KindEmpty:
@@ -268,6 +276,11 @@ func turn(cfg Config, c *wire.Conn) error {
 	}
 	if err := c.SendJSON(wire.JSON, man); err != nil {
 		return err
+	}
+	if needHive {
+		if err := takeHive(hive, *t.Hive, c.TarReader()); err != nil {
+			return err
+		}
 	}
 	for range sent(t.Mounts) {
 		var tr wire.Tree
@@ -430,17 +443,91 @@ loop:
 	return c.Send(wire.Done, nil)
 }
 
-// findTools gives each tool the turn names its path here: the hive binary,
-// the path runner.json names, or where sandbox-exec would find it (PATH,
+var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// hiveFor is where the turn's hive binary (the core's own, Turn.Hive) is
+// kept here, and whether the Hive must send it first; why, when not "", is
+// why the turn can't run here. A turn that names hive among its tools runs
+// the core's hive as `hive` inside the sandbox, never this machine's
+// installed one: that one is whatever release the person put here, and an
+// older hive CLI parses the core's newer ops wrong (10-29: `hive agent
+// heavy` read as a generic --key op on iiks1). The binary sent runs only
+// inside the sandbox; sandbox-exec is still cfg.Hive.
+func hiveFor(cfg Config, t wire.Turn) (path string, need bool, why string) {
+	if !slices.Contains(t.Tools, "hive") {
+		return "", false, ""
+	}
+	if t.Hive == nil || !sha256Hex.MatchString(t.Hive.SHA256) || t.Hive.Size <= 0 || t.Hive.Size > wire.MaxHive {
+		return "", false, "the turn's hive binary wasn't named (a Hive from before protocol 2)"
+	}
+	if own, err := wire.ELFMachine(cfg.Hive); err != nil || own != t.Hive.Machine {
+		return "", false, fmt.Sprintf("the Hive's hive binary is built for %s, this machine's hive for %s", t.Hive.Machine, cmp.Or(own, fmt.Sprint(err)))
+	}
+	dir := filepath.Join(cfg.Dir, "hive")
+	os.MkdirAll(dir, 0o700)
+	path = filepath.Join(dir, t.Hive.SHA256)
+	if fi, err := os.Stat(path); err == nil && fi.Size() == t.Hive.Size {
+		now := time.Now()
+		os.Chtimes(path, now, now) // in use: pruneHive keeps it
+		return path, false, ""
+	}
+	return path, true, ""
+}
+
+// takeHive reads the hive binary the Hive sends into path, checking it is
+// the one Turn.Hive names, and drops the copies no turn has used in a day.
+func takeHive(path string, want wire.HiveBin, r io.Reader) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".hive-*")
+	if err != nil {
+		wire.Drain(r)
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	h := sha256.New()
+	n, err := io.Copy(io.MultiWriter(tmp, h), io.LimitReader(r, wire.MaxHive+1))
+	tmp.Close()
+	if err != nil {
+		return err
+	}
+	if err := wire.Drain(r); err != nil {
+		return err
+	}
+	if got := hex.EncodeToString(h.Sum(nil)); n != want.Size || got != want.SHA256 {
+		return fmt.Errorf("the hive binary sent (%d bytes, sha256 %s) isn't the one named (%d bytes, %s)", n, got, want.Size, want.SHA256)
+	}
+	if err := os.Chmod(tmp.Name(), 0o755); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return err
+	}
+	pruneHive(filepath.Dir(path), path)
+	return nil
+}
+
+// pruneHive removes the hive binaries in dir besides keep that no turn has
+// used in a day. One that a running turn has mounted stays open to it.
+func pruneHive(dir, keep string) {
+	ents, _ := os.ReadDir(dir)
+	for _, e := range ents {
+		p := filepath.Join(dir, e.Name())
+		if fi, err := e.Info(); err == nil && p != keep && time.Since(fi.ModTime()) > 24*time.Hour {
+			os.Remove(p)
+		}
+	}
+}
+
+// findTools gives each tool the turn names its path here: the hive binary
+// the Hive sent (hive), the path runner.json names, or where sandbox-exec would find it (PATH,
 // ~/.local/bin, /usr/local/bin). missing are the names found nowhere: a turn
 // whose harness isn't here is refused before it takes a place, so it runs on
 // the Hive's machine instead of ending 'tool "claude" not found' (exit 125).
-func findTools(cfg Config, names []string) (tools, missing []string) {
+func findTools(cfg Config, names []string, hive string) (tools, missing []string) {
 	home, _ := os.UserHomeDir()
 	for _, name := range names {
 		switch p, ok := cfg.Tools[name]; {
-		case name == "hive":
-			tools = append(tools, cfg.Hive)
+		case name == "hive" && hive != "":
+			tools = append(tools, hive)
 			continue
 		case ok:
 			tools = append(tools, p)
