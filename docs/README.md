@@ -127,6 +127,20 @@ It is an optional module, not one of the defaults.
   from a hive binary installed on it, so a turn there can write only its own
   folders, reaches the network only through the egress proxy (with the
   turn's allow list), and can't reach iiks1's local services or network.
+- **A turn there runs the core's own hive CLI.** The `hive` a turn calls
+  (`hive agent heavy`, `finish`, ...) is the core's binary, the one it named
+  among the turn's tools, not the release installed on the runner: the Hive
+  updates every 6 hours, and an older hive parses newer ops wrong (10-29:
+  `hive agent heavy ... -- python3 loop.py` on iiks1 gave `expected --key`).
+  The Hive sends that binary with the turn the first time, the runner keeps
+  it by its sha256 under its `hive/` folder (dropping copies no turn used in a
+  day), and later turns of the same release send only its name. It runs only
+  inside the sandbox, as `/hive/bin/hive`; `sandbox-exec` is still the
+  runner's own hive, so nothing the Hive sends runs outside the sandbox
+  there. A turn whose hive is built for another kind of machine than the
+  runner's, or that the Hive can't read, doesn't go and runs here. A runner
+  from before this (protocol 1) answers `protocol 2, this runner speaks 1`
+  and gets no turns until it is rebuilt.
 
 ## Setting up a second machine
 
@@ -136,9 +150,9 @@ machine a separate non-admin Linux user to run turns as (below:
 binary.
 
 **1. On the other machine (iiks1)**, as `hive-runner`, install the hive binary
-with the same release as the main machine (v0.1.136 or later: the installer,
-or copy `~/.local/bin/hive` from the main machine), and check its sandbox
-works:
+(v0.1.136 or later: the installer, or copy `~/.local/bin/hive` from the main
+machine; it runs only the sandbox, as each turn's `hive` CLI comes from the
+Hive), and check its sandbox works:
 
 ```sh
 hive sandbox-probe           # should print: ok <sandbox>
@@ -207,7 +221,9 @@ To take the Hive's key off iiks1, delete its line from
 `~/.ssh/authorized_keys` there.
 
 To update the runner after a change to the module (a fix on the runner's
-side of the link only takes effect once iiks1 runs it), as `hive-runner` there:
+side of the link only takes effect once iiks1 runs it; a change of protocol,
+such as 2, where turns bring the core's hive, gives it no turns until then),
+as `hive-runner` there:
 
 ```sh
 cd hive-dispatch && git pull && go build -o ~/.local/bin/hive-dispatch ./cmd/dispatch

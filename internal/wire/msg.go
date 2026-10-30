@@ -13,6 +13,7 @@ import (
 //
 //	Hive    J Hello{op: "status"}         runner  J Status
 //	Hive    J Hello{op: "turn"}, J Turn   runner  J Manifests (of its cached shared mounts)
+//	Hive    if Manifests.NeedHive: T..., E (the hive binary Turn.Hive names)
 //	Hive    per run or shared mount: J Tree, T..., E
 //	runner  J Started, then O/R output and M mailbox requests as they come;
 //	Hive    I mailbox responses and S (stop) as they come
@@ -71,12 +72,27 @@ type Turn struct {
 	Mounts []MountPlan `json:"mounts"`
 	Stdin  []byte      `json:"stdin"`
 	Tools  []string    `json:"tools"` // base names of the tools to expose
+	// Hive is the hive binary the core named among the turn's tools. It is
+	// the turn's `hive` inside the sandbox there too, so its `hive agent`
+	// ops are the core's own CLI, not whatever release the runner has
+	// installed. The runner's own hive still runs sandbox-exec.
+	Hive *HiveBin `json:"hive,omitempty"`
+}
+
+// HiveBin names a hive binary by its content.
+type HiveBin struct {
+	SHA256  string `json:"sha256"`
+	Size    int64  `json:"size"`
+	Machine string `json:"machine"` // its ELF machine (EM_X86_64): a runner of another kind can't run it
 }
 
 // Manifests is the runner's cached state of the shared mounts, by index.
 type Manifests struct {
 	Mounts map[int]Manifest `json:"mounts"`
-	Error  string           `json:"error,omitempty"` // the runner won't take the turn, and why
+	// NeedHive asks for the hive binary Turn.Hive names: the runner hasn't
+	// it cached yet.
+	NeedHive bool   `json:"need_hive,omitempty"`
+	Error    string `json:"error,omitempty"` // the runner won't take the turn, and why
 }
 
 // Tree heads a tar stream for one mount.

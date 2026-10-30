@@ -687,6 +687,70 @@ func TestBurstStopsAtRoom(t *testing.T) {
 	}
 }
 
+// A turn there runs the core's own hive as `hive`, not the release the
+// runner has installed: the Hive sends it once, the runner keeps it by its
+// sha256, and later turns use the copy kept. The runner's own hive still
+// runs sandbox-exec.
+func TestTurnRunsTheCoresHive(t *testing.T) {
+	w := newWorld(t)
+	raw, err := os.ReadFile(built.fakehive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	core := filepath.Join(t.TempDir(), "hive")
+	os.WriteFile(core, append(raw, "newer release"...), 0o755) // a hive other than the runner's
+	w.spec.Tools = []string{core, "claude"}
+	hb, err := wire.DescribeHive(core)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := filepath.Join(w.remote, "hive", hb.SHA256)
+	if code := w.delegate(); code != 3 {
+		t.Fatalf("exit %d: %s", code, w.read(w.out+".err"))
+	}
+	if out := w.read(w.out); !strings.Contains(out, "tools: "+kept+" ") {
+		t.Errorf("the turn's hive isn't the core's, kept at %s:\n%s", kept, out)
+	}
+	if got, _ := os.ReadFile(kept); !bytes.Equal(got, append(raw, "newer release"...)) {
+		t.Errorf("the hive kept there isn't the core's (%d bytes)", len(got))
+	}
+	first := w.home.Turns()[0].Sent
+	if first < hb.Size {
+		t.Errorf("sent %d bytes, less than the hive binary's %d", first, hb.Size)
+	}
+	os.WriteFile(w.out, nil, 0o644)
+	if code := w.delegate(); code != 3 {
+		t.Fatalf("second turn: exit %d: %s", code, w.read(w.out+".err"))
+	}
+	if again := w.home.Turns()[0].Sent; again >= hb.Size {
+		t.Errorf("the second turn sent the hive binary again (%d bytes)", again)
+	}
+	if out := w.read(w.out); !strings.Contains(out, "tools: "+kept+" ") {
+		t.Errorf("the second turn's hive isn't the one kept:\n%s", out)
+	}
+}
+
+// A hive binary the Hive can't describe (not an executable it can read)
+// doesn't go: the turn runs here, as the core's.
+func TestTurnWhoseHiveCantGoRunsHere(t *testing.T) {
+	w := newWorld(t)
+	core := filepath.Join(t.TempDir(), "hive")
+	os.WriteFile(core, []byte("#!/bin/sh\nexit 7\n"), 0o755)
+	w.spec.Tools = []string{core, "claude"}
+	t.Setenv(GiveBackEnv, "1")
+	if code := w.delegate(); code != 125 {
+		t.Fatalf("exit %d, want 125 (given back): %s", code, w.read(w.out+".err"))
+	}
+	if errs := w.read(w.out + ".err"); !strings.Contains(errs, "hive binary can't go") {
+		t.Errorf(".err doesn't say why: %s", errs)
+	}
+	if _, err := os.Stat(filepath.Join(w.remote, "turns")); err == nil {
+		if ents, _ := os.ReadDir(filepath.Join(w.remote, "turns")); len(ents) != 0 {
+			t.Errorf("a turn folder was made there: %v", ents)
+		}
+	}
+}
+
 // A tool tree the sandbox reads in place (/opt/eda-toolchain) goes among the
 // turn's tools when its checkout names it, so only a runner that has it
 // takes the turn.

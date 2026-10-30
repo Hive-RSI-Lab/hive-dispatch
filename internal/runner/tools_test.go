@@ -15,7 +15,7 @@ func TestToolTreeMustBeHere(t *testing.T) {
 	os.MkdirAll(tree, 0o755)
 	os.WriteFile(file, []byte("x"), 0o755)
 	gone := filepath.Join(dir, "gone")
-	tools, missing := findTools(Config{Hive: "/x/hive"}, []string{"hive", tree, gone, file})
+	tools, missing := findTools(Config{Hive: "/x/hive"}, []string{"hive", tree, gone, file}, "/x/hive")
 	if !slices.Equal(tools, []string{"/x/hive"}) {
 		t.Errorf("tools = %v", tools)
 	}
