@@ -91,8 +91,8 @@ type Manifests struct {
 	Mounts map[int]Manifest `json:"mounts"`
 	// NeedHive asks for the hive binary Turn.Hive names: the runner hasn't
 	// it cached yet.
-	NeedHive bool `json:"need_hive,omitempty"`
-	Error  string           `json:"error,omitempty"` // the runner won't take the turn, and why
+	NeedHive bool   `json:"need_hive,omitempty"`
+	Error    string `json:"error,omitempty"` // the runner won't take the turn, and why
 }
 
 // Tree heads a tar stream for one mount.
