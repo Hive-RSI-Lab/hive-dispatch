@@ -71,6 +71,19 @@ func main() {
 			fmt.Fprintln(out, e)
 		}
 	}
+	// A mount outside the Hive's own paths and the checkout (a tool tree
+	// under /opt): what it shows, by the host folder it binds.
+	for _, m := range s.Mounts {
+		if m.Hide || m.Inside == "/work" || strings.HasPrefix(m.Inside, "/hive/") {
+			continue
+		}
+		var names []string
+		ents, _ := os.ReadDir(m.Host)
+		for _, e := range ents {
+			names = append(names, e.Name())
+		}
+		fmt.Fprintf(out, "mount %s from %s: %s\n", m.Inside, m.Host, strings.Join(names, " "))
+	}
 	work, box := at["/work"], at["/hive/box"]
 	if strings.Contains(string(prompt), "stop") {
 		fmt.Fprintln(out, "waiting for stop")

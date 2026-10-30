@@ -14,6 +14,7 @@ import (
 //	Hive    J Hello{op: "status"}         runner  J Status
 //	Hive    J Hello{op: "turn"}, J Turn   runner  J Manifests (of its cached shared mounts)
 //	Hive    if Manifests.NeedHive: T..., E (the hive binary Turn.Hive names)
+//	Hive    per path in Manifests.NeedTrees: T..., E (that tool tree, Turn.Trees)
 //	Hive    per run or shared mount: J Tree, T..., E
 //	runner  J Started, then O/R output and M mailbox requests as they come;
 //	Hive    I mailbox responses and S (stop) as they come
@@ -51,7 +52,7 @@ type Status struct {
 	// Binary is the sha256 of the dispatch binary serving: the Hive sends
 	// its own when they differ (Update).
 	Binary string `json:"binary,omitempty"`
-	Error      string  `json:"error,omitempty"`
+	Error  string `json:"error,omitempty"`
 }
 
 // Mount kinds.
@@ -88,6 +89,11 @@ type Turn struct {
 	// ops are the core's own CLI, not whatever release the runner has
 	// installed. The runner's own hive still runs sandbox-exec.
 	Hive *HiveBin `json:"hive,omitempty"`
+	// Trees are the tool trees among Tools (absolute paths) small enough to
+	// send: a runner without its own keeps the Hive's copy, by content, and
+	// mounts it at the same path. A runner from before them ignores them and
+	// refuses the turn as it did, so it runs on the Hive's machine.
+	Trees []ToolTree `json:"trees,omitempty"`
 }
 
 // HiveBin names a hive binary by its content.
@@ -102,8 +108,11 @@ type Manifests struct {
 	Mounts map[int]Manifest `json:"mounts"`
 	// NeedHive asks for the hive binary Turn.Hive names: the runner hasn't
 	// it cached yet.
-	NeedHive bool   `json:"need_hive,omitempty"`
-	Error    string `json:"error,omitempty"` // the runner won't take the turn, and why
+	NeedHive bool `json:"need_hive,omitempty"`
+	// NeedTrees asks for the tool trees of Turn.Trees at these paths, in
+	// this order: the runner hasn't kept them yet.
+	NeedTrees []string `json:"need_trees,omitempty"`
+	Error     string   `json:"error,omitempty"` // the runner won't take the turn, and why
 }
 
 // Tree heads a tar stream for one mount.
