@@ -263,7 +263,8 @@ On the main machine (the module, run as `hive dispatch ...`):
 | `dispatch key` | the Hive's public key, made the first time |
 | `dispatch add NAME ADDRESS --host-key K` | registers a runner (`ssh://user@host[:port][/path/to/hive-dispatch]`)|
 | `dispatch list`, `dispatch status` | runners, their room, the latest turns (`status` reads every runner first) |
-| `dispatch score` | the project's score (`.hive/project.json`): turns a runner ran that ended with exit 0 in the last 24 hours, by when they ended; 0 with no records |
+| `dispatch score` | the project's score (`.hive/project.json`): the share, out of 100, of dispatch's scenarios (`hive.Scenarios` in internal/hive/bench.go: a turn sent and brought back, the cache, a stop, each fallback and give-back, a check never run, the core's hive sent once, room on one reading) this commit passes against a runner that is itself on this machine; run from the source tree, offline, each scenario on its own line on stderr. It reads the commit, not whether iiks1 was up |
+| `dispatch score --live` | turns a runner ran that ended with exit 0 in the last 24 hours, by when they ended; 0 with no records |
 | `dispatch on|off|remove NAME` | |
 
 On the other machine: `hive-dispatch runner setup`, `hive-dispatch runner

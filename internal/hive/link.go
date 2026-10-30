@@ -31,11 +31,15 @@ type Link struct {
 // key isn't held to a forced command (it should be: see docs/README.md).
 const RemoteCommand = "hive-dispatch runner serve"
 
-// testLinks lets the tests reach a runner on this machine through a local
-// command instead of ssh, by its address. Only _test.go files fill it: a
-// runner in runners.json is always ssh://, so ssh is the only command a
-// link ever runs.
-var testLinks = map[string][]string{}
+// testLinks lets the tests and the score's bench reach a runner on this
+// machine through a local command instead of ssh, by its address. Only
+// localRunner fills it, for the bench's scenes (bench.go): a runner in
+// runners.json is always ssh://, so ssh is the only command a link to one
+// ever runs.
+var (
+	testLinks = map[string][]string{}
+	linksMu   sync.Mutex
+)
 
 // safePath is a hive-dispatch path on the runner, sent as the remote command.
 var safePath = regexp.MustCompile(`^/[A-Za-z0-9/._-]+$`)
@@ -51,7 +55,10 @@ var (
 
 // Argv is the command that opens a link to r: ssh, to an ssh:// address.
 func (h Home) Argv(r Runner) ([]string, error) {
-	if argv, ok := testLinks[r.Address]; ok {
+	linksMu.Lock()
+	argv, ok := testLinks[r.Address]
+	linksMu.Unlock()
+	if ok {
 		return argv, nil
 	}
 	u, err := url.Parse(r.Address)
