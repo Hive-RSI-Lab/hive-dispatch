@@ -32,3 +32,19 @@ func TestScoreCountsRunnerTurnsEndedOK(t *testing.T) {
 		t.Fatalf("score %d, want 3", n)
 	}
 }
+
+// The project's score is the bench: every scenario passes on this commit.
+func TestBenchPasses(t *testing.T) {
+	if testing.Short() {
+		t.Skip("plays every scenario against a runner")
+	}
+	rs := Bench(t.TempDir(), built.dispatch, built.fakehive, 3*time.Minute)
+	for _, r := range rs {
+		if r.Err != nil {
+			t.Errorf("%s: %v", r.Name, r.Err)
+		}
+	}
+	if n := BenchScore(rs); n != 100 {
+		t.Fatalf("score %d, want 100", n)
+	}
+}

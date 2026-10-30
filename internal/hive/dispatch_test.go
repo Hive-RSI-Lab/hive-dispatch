@@ -44,14 +44,6 @@ func TestMain(m *testing.M) {
 // testHostKey stands in for a runner's host key: a test link runs no ssh.
 const testHostKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest"
 
-// localRunner is an ssh:// address that the tests' links reach through cmd
-// on this machine instead (testLinks), as a runner in runners.json can't.
-func localRunner(cmd string) string {
-	addr := fmt.Sprintf("ssh://test@link-%d.invalid", len(testLinks))
-	testLinks[addr] = strings.Fields(cmd)
-	return addr
-}
-
 type world struct {
 	t                                                         *testing.T
 	home                                                      Home

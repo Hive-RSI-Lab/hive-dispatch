@@ -11,7 +11,8 @@
 //	dispatch remove NAME | off NAME | on NAME
 //	dispatch list                    the runners, their room and the latest turns
 //	dispatch status                  reads every runner now
-//	dispatch score                   turns a runner ran and ended ok in the last 24 hours
+//	dispatch score                   the share of the bench's scenarios this commit passes, of 100 (from the source tree)
+//	dispatch score --live            turns a runner ran and ended ok in the last 24 hours
 //
 // On the other machine, installed as hive-dispatch:
 //
@@ -31,7 +32,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -55,12 +58,17 @@ func run(args []string) int {
 		return runnerCmd(args[1:])
 	}
 	if args[0] == "score" {
-		// The project's score: no module folder or no records reads 0.
-		n := 0
-		if h, err := home(); err == nil {
-			n = h.Score(time.Now())
+		if len(args) > 1 && args[1] == "--live" {
+			// Turns a runner ran and ended ok today: no module folder or no
+			// records reads 0.
+			n := 0
+			if h, err := home(); err == nil {
+				n = h.Score(time.Now())
+			}
+			fmt.Println(n)
+			return 0
 		}
-		fmt.Println(n)
+		fmt.Println(score())
 		return 0
 	}
 	h, err := home()
@@ -271,4 +279,62 @@ func fail(err error) int {
 	}
 	fmt.Fprintln(os.Stderr, "dispatch:", err)
 	return 1
+}
+
+// score is the project's score: the share of dispatch's scenarios
+// (hive.Scenarios) this binary passes against a runner that is itself, on
+// this machine, out of 100. It runs from the project's source tree, as
+// `go run ./cmd/dispatch score` does, to build the bench's fake sandbox
+// (internal/hive/testdata/fakehive); what can't run reads 0.
+func score() int {
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "dispatch score:", err)
+		return 0
+	}
+	src, err := os.Getwd()
+	for ; err == nil; src = filepath.Dir(src) {
+		if _, e := os.Stat(filepath.Join(src, "internal", "hive", "testdata", "fakehive", "main.go")); e == nil {
+			break
+		}
+		if filepath.Dir(src) == src {
+			err = errors.New("run it from dispatch's source tree")
+		}
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "dispatch score:", err)
+		return 0
+	}
+	root, err := os.MkdirTemp("", "dispatch-score-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "dispatch score:", err)
+		return 0
+	}
+	defer os.RemoveAll(root)
+	gobin, err := exec.LookPath("go")
+	if err != nil {
+		gobin = filepath.Join(runtime.GOROOT(), "bin", "go")
+	}
+	fakehive := filepath.Join(root, "bin", "hive")
+	build := exec.Command(gobin, "build", "-o", fakehive, "./internal/hive/testdata/fakehive")
+	build.Dir = src
+	if out, err := build.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "dispatch score: building the fake sandbox: %v\n%s", err, out)
+		return 0
+	}
+	rs := hive.Bench(filepath.Join(root, "scenes"), exe, fakehive, 3*time.Minute)
+	for _, r := range rs {
+		mark := "ok  "
+		if r.Err != nil {
+			mark = "FAIL"
+		}
+		fmt.Fprintf(os.Stderr, "%s %5.1fs %s\n", mark, r.Took.Seconds(), r.Name)
+		if r.Err != nil {
+			fmt.Fprintf(os.Stderr, "     %v\n", r.Err)
+		}
+	}
+	return hive.BenchScore(rs)
 }
