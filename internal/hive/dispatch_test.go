@@ -457,7 +457,7 @@ func TestPlanCarriesNoHiddenOrHiveRecords(t *testing.T) {
 		kinds[m.Inside] = m.Kind
 	}
 	want := map[string]string{"/work": "run", "/hive/run": "run", "/hive/box": "run", "/hive/home": "run", "/hive/kb": "shared",
-		"/hive/modules": "shared", "/hive/tools": "shared", "/hive/projects": "empty", "/hive/state": "empty"}
+		"/hive/modules": "shared", "/hive/tools": "shared", "/hive/projects": "shared", "/hive/state": "empty"}
 	for in, k := range want {
 		if kinds[in] != k {
 			t.Errorf("%s goes as %q, want %q", in, kinds[in], k)
@@ -491,6 +491,51 @@ func TestDispatchable(t *testing.T) {
 	s.Cwd = "/work"
 	if why := Dispatchable(s); why != "" {
 		t.Errorf("a sandboxed turn wasn't: %s", why)
+	}
+	// A run that reads the Hive's records runs here (a reviewer checks
+	// goals.md quotes against them); a worker goes with them empty.
+	s.Mounts = append(s.Mounts, spec.Mount{Host: "/h/state", Inside: "/hive/state"})
+	for id, here := range map[string]bool{"w-1": false, "r-1-0": true, "s-1-security-0": true, "sweep-1": true, "stepback-1": true, "j-1": true, "lead-lead": true} {
+		s.ID = id
+		if why := Dispatchable(s); (why != "") != here || here && !strings.Contains(why, "records") {
+			t.Errorf("%s: Dispatchable = %q", id, why)
+		}
+	}
+}
+
+// Another project's tracked files reach a turn there, not its .git or what
+// it built.
+func TestProjectsGoTrackedOnly(t *testing.T) {
+	w := newWorld(t)
+	app := filepath.Join(filepath.Dir(w.work), "projects", "app")
+	os.MkdirAll(filepath.Join(app, "firmware", "main"), 0o755)
+	os.MkdirAll(filepath.Join(app, "build"), 0o755)
+	os.WriteFile(filepath.Join(app, "firmware", "main", "main.c"), []byte("int main;\n"), 0o644)
+	os.WriteFile(filepath.Join(app, "README.md"), []byte("app\n"), 0o644)
+	os.WriteFile(filepath.Join(app, "build", "big.bin"), []byte("built"), 0o644)
+	os.WriteFile(filepath.Join(app, "untracked.txt"), []byte("x"), 0o644)
+	os.MkdirAll(filepath.Join(filepath.Dir(app), "notgit"), 0o755)
+	os.WriteFile(filepath.Join(filepath.Dir(app), "notgit", "f"), []byte("x"), 0o644)
+	for _, args := range [][]string{{"init", "-q"}, {"add", "firmware", "README.md"}} {
+		if out, err := exec.Command("git", append([]string{"-C", app}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	if code := w.delegate(); code != 3 {
+		t.Fatalf("exit %d: %s", code, w.read(w.out+".err"))
+	}
+	if got := w.read(filepath.Join(w.work, "projects-seen.txt")); got != "app/README.md\napp/firmware/main/main.c" {
+		t.Errorf("the turn saw %q under /hive/projects", got)
+	}
+	// A second turn sees a change, and a file no longer tracked goes.
+	os.WriteFile(filepath.Join(app, "firmware", "main", "main.c"), []byte("int main(void);\n"), 0o644)
+	exec.Command("git", "-C", app, "rm", "-q", "--cached", "README.md").Run()
+	os.WriteFile(w.out, nil, 0o644)
+	if code := w.delegate(); code != 3 {
+		t.Fatalf("second turn: exit %d: %s", code, w.read(w.out+".err"))
+	}
+	if got := w.read(filepath.Join(w.work, "projects-seen.txt")); got != "app/firmware/main/main.c" {
+		t.Errorf("the second turn saw %q", got)
 	}
 }
 
