@@ -68,7 +68,14 @@ It is an optional module, not one of the defaults.
   iiks1 turns, install the harness there (and log it in) or name it under
   `"tools"`. With claude installed for `hive-runner`, real worker turns run
   there (the first: task 261028-141143, 2026-10-29, which ran `go test ./...`
-  and the score on iiks1). Its `hive agent` ops go through the relayed mailbox
+  and the score on iiks1). The same goes for a tool tree the sandbox reads
+  in place from the machine it runs on (it binds `/opt` whole, so a tree
+  there is no mount of the turn's and is never sent): a folder under `/opt`
+  here that the turn's checkout names in its tracked files (pll's
+  `project.json` names chip-flow's IIC-OSIC-TOOLS tree) goes among the
+  turn's tools by its absolute path, and a runner without that folder at the
+  same path refuses the turn, so it runs here. A runner from before that
+  check looks for it as a program and refuses it the same way. Its `hive agent` ops go through the relayed mailbox
   and wait on the core here like a local turn's: when this machine is loaded
   an op can time out on the runner and its reply still arrive minutes later.
 - **Worker turns only, no checks.** A worker turn needs only its harness on

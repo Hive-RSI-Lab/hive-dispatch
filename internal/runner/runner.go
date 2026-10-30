@@ -246,7 +246,7 @@ func turn(cfg Config, c *wire.Conn) error {
 	}
 	tools, missing := findTools(cfg, t.Tools, hive)
 	if len(missing) > 0 {
-		return refuse(wire.NoTool + strings.Join(missing, ", ") + " (put it on PATH or name its path under \"tools\" in runner.json)")
+		return refuse(wire.NoTool + strings.Join(missing, ", ") + " (put a program on PATH or name its path under \"tools\" in runner.json; a folder must be at the same path here)")
 	}
 	dir, lock, err := claim(cfg, unsafeName.ReplaceAllString(t.ID+"-"+t.Label, "_"))
 	if err != nil {
@@ -522,9 +522,18 @@ func pruneHive(dir, keep string) {
 // ~/.local/bin, /usr/local/bin). missing are the names found nowhere: a turn
 // whose harness isn't here is refused before it takes a place, so it runs on
 // the Hive's machine instead of ending 'tool "claude" not found' (exit 125).
+// A name that is an absolute path is a tool tree the sandbox reads in place
+// (/opt/eda-toolchain): it must be a folder at that path here, and it isn't
+// one of the sandbox's tools.
 func findTools(cfg Config, names []string, hive string) (tools, missing []string) {
 	home, _ := os.UserHomeDir()
 	for _, name := range names {
+		if filepath.IsAbs(name) {
+			if fi, err := os.Stat(name); err != nil || !fi.IsDir() {
+				missing = append(missing, name)
+			}
+			continue
+		}
 		switch p, ok := cfg.Tools[name]; {
 		case name == "hive" && hive != "":
 			tools = append(tools, hive)

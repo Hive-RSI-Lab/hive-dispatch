@@ -750,3 +750,59 @@ func TestTurnWhoseHiveCantGoRunsHere(t *testing.T) {
 		}
 	}
 }
+
+// A tool tree the sandbox reads in place (/opt/eda-toolchain) goes among the
+// turn's tools when its checkout names it, so only a runner that has it
+// takes the turn.
+func TestTurnNeedsToolTreesItsCheckoutNames(t *testing.T) {
+	opt := t.TempDir()
+	defer func(old []string) { ToolRoots = old }(ToolRoots)
+	ToolRoots = []string{opt}
+	eda, other := filepath.Join(opt, "eda-toolchain"), filepath.Join(opt, "google")
+	os.MkdirAll(eda, 0o755)
+	os.MkdirAll(other, 0o755)
+	os.WriteFile(filepath.Join(opt, "a-file"), []byte("x"), 0o644)
+
+	w := newWorld(t)
+	if got := NeedsPaths(w.spec); len(got) != 0 {
+		t.Fatalf("a checkout naming no tree needs %v", got)
+	}
+	// Not a repo git can search (the world's .git is a stub): project.json counts.
+	os.MkdirAll(filepath.Join(w.work, ".hive"), 0o755)
+	os.WriteFile(filepath.Join(w.work, ".hive", "project.json"), []byte(`{"test": "EDA_TOOLCHAIN=${EDA_TOOLCHAIN:-`+eda+`/iic-osic-tools-2026.09} bash tests/check.sh"}`), 0o644)
+	if got := NeedsPaths(w.spec); len(got) != 1 || got[0] != eda {
+		t.Fatalf("needs %v, want [%s]", got, eda)
+	}
+
+	// A real repo: what its tracked files name, not its untracked ones.
+	repo := t.TempDir()
+	os.WriteFile(filepath.Join(repo, "flow.sh"), []byte("tree="+other+"/chrome\n"), 0o644)
+	os.WriteFile(filepath.Join(repo, "scratch.txt"), []byte(eda+"\n"), 0o644)
+	for _, args := range [][]string{{"init", "-q"}, {"add", "flow.sh"}} {
+		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	s := w.spec
+	s.Mounts = append([]spec.Mount{{Host: repo, Inside: "/work", RW: true}}, s.Mounts[1:]...)
+	if got := NeedsPaths(s); len(got) != 1 || got[0] != other {
+		t.Fatalf("needs %v, want [%s]", got, other)
+	}
+
+	// The runner has the tree (it is this machine): the turn runs there.
+	if code := w.delegate(); code != 3 {
+		t.Fatalf("exit %d: %s", code, w.read(w.out+".err"))
+	}
+	if ps := w.home.Turns(); ps[0].Where != "fake" {
+		t.Fatalf("turns = %+v", ps)
+	}
+	// A runner that lacked it is passed over for such a turn.
+	w.home.Lack("fake", []string{eda})
+	os.WriteFile(w.out, nil, 0o644)
+	if code := w.delegate(); code != 3 {
+		t.Fatalf("exit %d: %s", code, w.read(w.out+".err"))
+	}
+	if ps := w.home.Turns(); ps[0].Where != "local" || !strings.Contains(ps[0].Why, "fake: hasn't "+eda) {
+		t.Fatalf("turns = %+v", ps)
+	}
+}

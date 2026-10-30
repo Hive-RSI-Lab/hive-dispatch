@@ -56,7 +56,7 @@ func (h Home) Delegate(specPath, runner string) int {
 		h.Claim(r, turn)
 	} else {
 		var why string
-		if r, why, err = h.PickFor(ToolNames(s.Tools), turn); err != nil || r.Name == "" {
+		if r, why, err = h.PickFor(TurnTools(s), turn); err != nil || r.Name == "" {
 			if err != nil {
 				why = err.Error()
 			}
