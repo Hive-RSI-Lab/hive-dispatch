@@ -248,14 +248,14 @@ func (h Home) markReported(k string) {
 	}
 }
 
-// Score is the project's score: how many turns ran on a runner and ended
-// with exit 0 in the day before now, by when they ended (At is when they
-// started).
+// Score is the project's score: how many worker turns (runs w-…, not a
+// gate- check) ran on a runner and ended with exit 0 in the day before now,
+// by when they ended (At is when they started).
 func (h Home) Score(now time.Time) int {
 	n := 0
 	for _, p := range h.Turns() {
 		end := p.At.Add(time.Duration(p.Secs * float64(time.Second)))
-		if p.Where != "local" && p.Where != "" && p.Ended && p.Exit == 0 &&
+		if strings.HasPrefix(p.Run, "w-") && p.Where != "local" && p.Where != "nowhere" && p.Where != "" && p.Ended && p.Exit == 0 &&
 			!end.After(now) && now.Sub(end) <= 24*time.Hour {
 			n++
 		}
